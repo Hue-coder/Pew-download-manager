@@ -595,6 +595,28 @@ async fn start_download_internal(
         url.split('?').next().and_then(|u| u.split('/').last()).unwrap_or("download").to_string()
     });
 
+    if url.starts_with("blob:") {
+        let err_msg = "Cannot download browser-internal blob URL. Please use the extension to select the direct stream.".to_string();
+        let item = DownloadItem {
+            id: id.clone(),
+            url: url.clone(),
+            filename: initial_name,
+            target_path: None,
+            total_bytes: None,
+            downloaded_bytes: 0,
+            speed_bps: 0.0,
+            status: "Error".to_string(),
+            parts,
+            error: Some(err_msg.clone()),
+        };
+        {
+            let mut map = downloads_map.lock().await;
+            map.insert(id.clone(), item.clone());
+        }
+        let _ = app.emit("download-update", item);
+        return Err(err_msg);
+    }
+
     let item = DownloadItem {
         id: id.clone(),
         url: url.clone(),

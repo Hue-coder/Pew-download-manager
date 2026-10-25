@@ -60,80 +60,104 @@
     }).catch(() => {});
   }
 
-  // 1. Pinterest Specific Main Pin Video Extractor
+  function hashStr(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) - h) + str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h);
+  }
+
+  // 1. Pinterest Specific Main Pin Video Extractor (never returns blob:)
   function extractPinterestPinMedia() {
     if (!window.location.hostname.includes('pinterest.')) return null;
 
-    // Look for video element in the primary Pin view
-    const mainContainer = document.querySelector('[data-test-id="visual-content-container"]') 
-                       || document.querySelector('[data-test-id="pin-closeup-image"]')
-                       || document.querySelector('div[role="main"]');
+    let foundUrls = [];
 
-    const videoEl = (mainContainer && mainContainer.querySelector('video')) || document.querySelector('video');
-    if (!videoEl) return null;
-
-    let src = videoEl.currentSrc || videoEl.src || '';
-    if (!src && videoEl.querySelector('source')) {
-      src = videoEl.querySelector('source').src || '';
+    // 1. Check __PWS_DATA__ script tag
+    const pwsScript = document.getElementById('__PWS_DATA__');
+    if (pwsScript && pwsScript.textContent) {
+      try {
+        const text = pwsScript.textContent;
+        const m3u8Matches = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[^\s"'<>]+\.m3u8[^\s"'<>]*/g) || [];
+        const mp4Matches = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[^\s"'<>]+\.mp4[^\s"'<>]*/g) || [];
+        foundUrls.push(...m3u8Matches, ...mp4Matches);
+      } catch (e) {}
     }
 
-    if (!src) return null;
+    // 2. Check application/ld+json scripts
+    document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+      try {
+        const json = JSON.parse(s.textContent);
+        if (json.contentUrl && json.contentUrl.includes('pinimg.com')) {
+          foundUrls.push(json.contentUrl);
+        }
+      } catch (e) {}
+    });
+
+    // 3. Check browser performance resource timing API for requested video files
+    try {
+      const resources = performance.getEntriesByType('resource');
+      for (const r of resources) {
+        if (r.name && (r.name.includes('pinimg.com/videos') || r.name.includes('.m3u8') || r.name.includes('.mp4'))) {
+          if (!r.name.startsWith('blob:') && !foundUrls.includes(r.name)) {
+            foundUrls.push(r.name);
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 4. Raw HTML regex fallback
+    if (foundUrls.length === 0) {
+      try {
+        const html = document.documentElement.innerHTML;
+        const matches = html.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[a-zA-Z0-9_\-\/]+(?:\.m3u8|\.mp4)/g) || [];
+        foundUrls.push(...matches);
+      } catch (e) {}
+    }
+
+    // Filter out blob: and keep valid http(s) URLs
+    const cleanUrls = Array.from(new Set(foundUrls)).filter(u => u.startsWith('http') && !u.startsWith('blob:') && (u.includes('.m3u8') || u.includes('.mp4')));
+
+    if (cleanUrls.length === 0) return null;
 
     const rawTitle = (document.title || 'Pinterest_Video').replace(/[\/\\:*?"<>|]/g, '_').trim();
-    const cleanTitle = rawTitle.replace(/[\s\-_]+/g, '_').substring(0, 40);
+    const cleanTitle = rawTitle.replace(/[\s\-_]+/g, '_').substring(0, 40) || 'Pinterest_Video';
 
     let items = [];
 
-    // If it's a direct MP4, derive the corresponding HLS master playlist which has sound!
-    // Example: https://v.pinimg.com/videos/mc/720p/3c/62/7f/3c627f10b7713f01905a5dc27725964d.mp4
-    // Master HLS: https://v.pinimg.com/videos/hls/3c/62/7f/3c627f10b7713f01905a5dc27725964d.m3u8
-    if (src.includes('/videos/mc/')) {
-      const hlsUrl = src.replace(/\/videos\/mc\/[^\/]+\//, '/videos/hls/').replace(/\.mp4(\?.*)?$/, '.m3u8$1');
+    // Prioritize HLS stream (contains full synchronized audio via FFmpeg!)
+    const hlsUrl = cleanUrls.find(u => u.includes('.m3u8'));
+    if (hlsUrl) {
       items.push({
-        id: 'pin_hls_audio',
+        id: 'pin_hls_' + hashStr(hlsUrl),
         url: hlsUrl,
         filename: `${cleanTitle}_HD.mp4`,
         format: 'MP4 (Full Audio)',
-        quality: '720p HD (with Sound)',
+        quality: 'Pinterest HD (with Sound)',
         mediaType: 'video',
         size: 0,
         priority: 1
       });
+    }
+
+    // Direct MP4 option
+    const mp4Url = cleanUrls.find(u => u.includes('.mp4')) || (hlsUrl ? hlsUrl.replace('/hls/', '/720p/').replace('.m3u8', '.mp4') : null);
+    if (mp4Url) {
       items.push({
-        id: 'pin_mp4_direct',
-        url: src,
-        filename: `${cleanTitle}_Direct.mp4`,
+        id: 'pin_mp4_' + hashStr(mp4Url),
+        url: mp4Url,
+        filename: `${cleanTitle}_720p.mp4`,
         format: 'MP4',
-        quality: 'Direct Stream',
+        quality: 'Direct 720p Stream',
         mediaType: 'video',
         size: 0,
         priority: 2
       });
-    } else if (src.includes('.m3u8')) {
-      items.push({
-        id: 'pin_hls_audio',
-        url: src,
-        filename: `${cleanTitle}_HD.mp4`,
-        format: 'MP4 (Full Audio)',
-        quality: 'HD Video (with Sound)',
-        mediaType: 'video',
-        size: 0,
-        priority: 1
-      });
-    } else {
-      items.push({
-        id: 'pin_direct',
-        url: src,
-        filename: `${cleanTitle}.mp4`,
-        format: 'MP4',
-        quality: 'Video Stream',
-        mediaType: 'video',
-        size: 0,
-        priority: 1
-      });
     }
 
-    return items;
+    return items.length > 0 ? items : null;
   }
 
   // 2. Resolve media via local Pew resolver or background
@@ -485,6 +509,11 @@
       itemEl.querySelector('.pew-action-download').addEventListener('click', (e) => {
         try {
           e.stopPropagation();
+          if (!item.url || item.url.startsWith('blob:')) {
+            alert('Cannot download internal browser blob. Resolving live stream...');
+            queryMedia();
+            return;
+          }
           safeSendMessage({
             action: 'TRIGGER_PEW_DOWNLOAD',
             url: item.url,

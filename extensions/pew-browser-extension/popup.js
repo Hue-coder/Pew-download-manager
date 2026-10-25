@@ -145,6 +145,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       `;
 
       card.querySelector('.btn-dl').addEventListener('click', () => {
+        if (!item.url || item.url.startsWith('blob:')) {
+          alert('Cannot download browser-internal blob URL. Please refresh the page to resolve the stream.');
+          return;
+        }
         fetch('http://127.0.0.1:41738/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
