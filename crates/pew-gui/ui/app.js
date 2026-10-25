@@ -30,6 +30,11 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   setupTauriListeners();
   loadInitialDownloads();
+
+  // Periodic polling fallback in case IPC events were missed
+  setInterval(() => {
+    loadInitialDownloads();
+  }, 2000);
 });
 
 function setupEventListeners() {
@@ -77,9 +82,6 @@ function setupEventListeners() {
     try {
       if (invoke) {
         await invoke('start_download', { url, filename, parts });
-      } else {
-        // Mock fallback for browser preview
-        createMockDownload(url, filename, parts);
       }
       closeModal();
     } catch (err) {
@@ -112,7 +114,6 @@ function openModal() {
   probeLoading.style.display = 'none';
   modalUrlInput.focus();
 
-  // Try auto-reading clipboard if it contains a URL
   navigator.clipboard.readText().then(text => {
     if (text && (text.startsWith('http://') || text.startsWith('https://'))) {
       modalUrlInput.value = text.trim();
@@ -141,15 +142,6 @@ async function triggerProbe(url) {
     } catch (err) {
       probeLoading.style.display = 'none';
     }
-  } else {
-    // Mock probe
-    setTimeout(() => {
-      modalFilenameInput.value = url.split('/').pop().split('?')[0] || 'file.bin';
-      probeSize.textContent = '100.00 MB';
-      probeRanges.textContent = 'Supported (Multi-thread)';
-      probeLoading.style.display = 'none';
-      probeInfo.style.display = 'flex';
-    }, 300);
   }
 }
 
@@ -160,6 +152,7 @@ function setupTauriListeners() {
     const item = event.payload;
     state.downloads.set(item.id, item);
     updateRow(item);
+    updateCategoryCounts();
     updateGlobalMetrics();
   });
 }
@@ -184,7 +177,7 @@ function renderTable() {
     emptyStateEl.style.display = 'flex';
   } else {
     emptyStateEl.style.display = 'none';
-    filtered.forEach(item => {
+    filtered.reverse().forEach(item => {
       bodyEl.appendChild(createRowElement(item));
     });
   }
@@ -221,8 +214,6 @@ function createRowElement(item) {
   const tr = document.createElement('tr');
   tr.id = `row-${item.id}`;
   tr.innerHTML = getRowHtml(item);
-
-  // Hook action buttons
   attachRowEvents(tr, item);
   return tr;
 }
@@ -255,17 +246,19 @@ function getRowHtml(item) {
   if (item.status === 'Completed') statusClass = 'completed';
   else if (item.status === 'Error') statusClass = 'error';
 
+  const locationHint = item.target_path || `Saving to Downloads\\${item.filename}`;
+
   return `
     <td>
       <div class="file-cell">
         <span class="file-icon">${icon}</span>
         <div class="file-info">
           <span class="file-name" title="${item.filename}">${item.filename}</span>
-          <span class="file-url" title="${item.url}">${item.url}</span>
+          <span class="file-url" title="${locationHint}">${locationHint}</span>
         </div>
       </div>
     </td>
-    <td>${total > 0 ? formatBytes(total) : 'Unknown'}</td>
+    <td>${total > 0 ? formatBytes(total) : 'Calculating...'}</td>
     <td>
       <div class="progress-wrapper">
         <div class="progress-info">
@@ -286,9 +279,9 @@ function getRowHtml(item) {
     <td>
       <div class="action-btn-cell">
         ${item.status === 'Completed' && item.target_path ? `
-          <button class="icon-action-btn btn-open" title="Open Folder">📂</button>
+          <button class="icon-action-btn btn-open" title="Open in File Explorer">📂</button>
         ` : ''}
-        <button class="icon-action-btn btn-del" title="Delete">🗑️</button>
+        <button class="icon-action-btn btn-del" title="Remove from list">🗑️</button>
       </div>
     </td>
   `;
@@ -317,7 +310,7 @@ function attachRowEvents(row, item) {
 function updateCategoryCounts() {
   const items = Array.from(state.downloads.values());
   document.getElementById('count-all').textContent = items.length;
-  document.getElementById('count-downloading').textContent = items.filter(i => i.status === 'Downloading').length;
+  document.getElementById('count-downloading').textContent = items.filter(i => i.status === 'Downloading' || i.status === 'Starting').length;
   document.getElementById('count-completed').textContent = items.filter(i => i.status === 'Completed').length;
 }
 
@@ -336,7 +329,7 @@ function getFileIcon(filename) {
   const ext = (filename || '').split('.').pop().toLowerCase();
   if (['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext)) return '🗜️';
   if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext)) return '🎬';
-  if (['mp3', 'wav', 'flac', 'aac'].includes(ext)) return '🎵';
+  if (['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(ext)) return '🎵';
   if (['pdf', 'docx', 'doc', 'txt'].includes(ext)) return '📄';
   if (['exe', 'msi', 'dmg', 'apk'].includes(ext)) return '💻';
   if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return '🖼️';
@@ -354,39 +347,4 @@ function formatBytes(bytes) {
 function formatSpeed(bps) {
   if (!bps || bps <= 0) return '0.0 KB/s';
   return formatBytes(bps) + '/s';
-}
-
-// Mock fallback for browser inspection
-function createMockDownload(url, filename, parts) {
-  const id = 'mock_' + Date.now();
-  const name = filename || url.split('/').pop() || 'test_file.iso';
-  const total = 50 * 1024 * 1024;
-  let downloaded = 0;
-
-  const item = {
-    id,
-    url,
-    filename: name,
-    total_bytes: total,
-    downloaded_bytes: 0,
-    speed_bps: 12.5 * 1024 * 1024,
-    status: 'Downloading',
-    parts,
-    target_path: null
-  };
-
-  state.downloads.set(id, item);
-  renderTable();
-
-  const interval = setInterval(() => {
-    downloaded += 2.5 * 1024 * 1024;
-    item.downloaded_bytes = Math.min(downloaded, total);
-    if (downloaded >= total) {
-      item.status = 'Completed';
-      item.speed_bps = 0;
-      clearInterval(interval);
-    }
-    updateRow(item);
-    updateGlobalMetrics();
-  }, 200);
 }

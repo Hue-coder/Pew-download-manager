@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, Mutex};
 use pew_core::{Downloader, DownloadConfig, DownloadEvent, RemoteFileInfo};
 
@@ -18,7 +18,7 @@ pub struct DownloadItem {
     pub total_bytes: Option<u64>,
     pub downloaded_bytes: u64,
     pub speed_bps: f64,
-    pub status: String, // "Queued", "Downloading", "Completed", "Paused", "Error"
+    pub status: String, // "Starting", "Downloading", "Completed", "Paused", "Error"
     pub parts: usize,
     pub error: Option<String>,
 }
@@ -62,16 +62,32 @@ async fn start_download(
     output_dir: Option<String>,
     parts: Option<usize>,
 ) -> Result<String, String> {
+    start_download_internal(app, state.downloads.clone(), url, filename, output_dir, parts).await
+}
+
+async fn start_download_internal(
+    app: AppHandle,
+    downloads_map: Arc<Mutex<HashMap<String, DownloadItem>>>,
+    url: String,
+    filename: Option<String>,
+    output_dir: Option<String>,
+    parts: Option<usize>,
+) -> Result<String, String> {
     let id = format!("dl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     let parts = parts.unwrap_or(8).clamp(1, 32);
 
     let default_dir = dirs_fallback();
     let out_dir = output_dir.map(PathBuf::from).unwrap_or(default_dir);
 
+    // Initial item
+    let initial_name = filename.clone().unwrap_or_else(|| {
+        url.split('?').next().and_then(|u| u.split('/').last()).unwrap_or("download").to_string()
+    });
+
     let item = DownloadItem {
         id: id.clone(),
         url: url.clone(),
-        filename: filename.clone().unwrap_or_else(|| "downloading".to_string()),
+        filename: initial_name,
         target_path: None,
         total_bytes: None,
         downloaded_bytes: 0,
@@ -82,11 +98,12 @@ async fn start_download(
     };
 
     {
-        let mut map = state.downloads.lock().await;
-        map.insert(id.clone(), item);
+        let mut map = downloads_map.lock().await;
+        map.insert(id.clone(), item.clone());
     }
+    let _ = app.emit("download-update", item);
 
-    let downloads_ref = state.downloads.clone();
+    let downloads_ref = downloads_map.clone();
     let task_id = id.clone();
     let app_handle = app.clone();
 
@@ -99,7 +116,6 @@ async fn start_download(
         let downloader = Downloader::new(config);
         let (tx, mut rx) = mpsc::unbounded_channel::<DownloadEvent>();
 
-        // Event listener for progress updates
         let listener_id = task_id.clone();
         let app_listener = app_handle.clone();
         let dl_state = downloads_ref.clone();
@@ -178,8 +194,7 @@ fn open_in_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg("/select,")
-            .arg(&path)
+            .arg(format!("/select,{}", path))
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -196,9 +211,127 @@ fn dirs_fallback() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+// Background Local RPC Server to communicate with the browser extension
+fn start_local_rpc_server(app_handle: AppHandle, downloads_map: Arc<Mutex<HashMap<String, DownloadItem>>>) {
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = match TcpListener::bind("127.0.0.1:41738").await {
+            Ok(l) => l,
+            Err(_) => return, // Port already in use or restricted
+        };
+
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let app = app_handle.clone();
+            let dl_map = downloads_map.clone();
+
+            tokio::spawn(async move {
+                let mut buffer = [0u8; 8192];
+                let n = match socket.read(&mut buffer).await {
+                    Ok(n) if n > 0 => n,
+                    _ => return,
+                };
+
+                let request = String::from_utf8_lossy(&buffer[..n]);
+                let (first_line, body) = match request.split_once("\r\n\r\n") {
+                    Some((h, b)) => (h.lines().next().unwrap_or(""), b),
+                    None => (request.lines().next().unwrap_or(""), ""),
+                };
+
+                let cors_headers = "HTTP/1.1 200 OK\r\n\
+Access-Control-Allow-Origin: *\r\n\
+Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+Access-Control-Allow-Headers: Content-Type\r\n\
+Content-Type: application/json\r\n\r\n";
+
+                if first_line.starts_with("OPTIONS") {
+                    let _ = socket.write_all(cors_headers.as_bytes()).await;
+                    return;
+                }
+
+                if first_line.starts_with("POST /show") || first_line.starts_with("GET /show") {
+                    // Bring main window to front
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    let resp = format!("{} {{\"status\":\"ok\"}}", cors_headers);
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                if first_line.starts_with("POST /download") {
+                    // Bring main window to front
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+
+                    #[derive(Deserialize)]
+                    struct RpcDownloadPayload {
+                        url: String,
+                        filename: Option<String>,
+                        parts: Option<usize>,
+                    }
+
+                    if let Ok(payload) = serde_json::from_str::<RpcDownloadPayload>(body) {
+                        let _ = start_download_internal(
+                            app,
+                            dl_map,
+                            payload.url,
+                            payload.filename,
+                            None,
+                            payload.parts,
+                        ).await;
+
+                        let resp = format!("{} {{\"success\":true}}", cors_headers);
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        return;
+                    }
+                }
+
+                // Default health check response
+                let resp = format!("{} {{\"app\":\"pew\",\"status\":\"running\"}}", cors_headers);
+                let _ = socket.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+}
+
+fn register_pew_protocol() {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        if let Ok(exe_path) = std::env::current_exe() {
+            let exe_str = exe_path.to_string_lossy().to_string();
+            let _ = Command::new("reg")
+                .args(["add", r"HKCU\Software\Classes\pew", "/ve", "/d", "URL:Pew Protocol", "/f"])
+                .output();
+            let _ = Command::new("reg")
+                .args(["add", r"HKCU\Software\Classes\pew", "/v", "URL Protocol", "/d", "", "/f"])
+                .output();
+            let _ = Command::new("reg")
+                .args(["add", r"HKCU\Software\Classes\pew\shell\open\command", "/ve", "/d", &format!("\"{}\" \"%1\"", exe_str), "/f"])
+                .output();
+        }
+    }
+}
+
 fn main() {
+    register_pew_protocol();
+
+    let app_state = AppState::default();
+    let downloads_ref = app_state.downloads.clone();
+
     tauri::Builder::default()
-        .manage(AppState::default())
+        .manage(app_state)
+        .setup(move |app| {
+            start_local_rpc_server(app.handle().clone(), downloads_ref);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             probe_url,
             start_download,

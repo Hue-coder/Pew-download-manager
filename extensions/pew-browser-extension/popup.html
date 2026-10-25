@@ -7,7 +7,7 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     body {
-      width: 360px;
+      width: 380px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background-color: #0b0f19;
       color: #f8fafc;
@@ -35,17 +35,64 @@
       font-weight: 700;
       letter-spacing: 0.5px;
     }
-    .status-pill {
+    .app-status {
       font-size: 10px;
-      background: rgba(16, 185, 129, 0.15);
-      color: #10b981;
       padding: 2px 8px;
       border-radius: 10px;
       font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 4px;
     }
+    .status-online {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+    }
+    .status-offline {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    
+    /* Top action banner to open desktop app */
+    .app-banner {
+      padding: 8px 12px;
+      background: linear-gradient(90deg, rgba(6, 182, 212, 0.15), rgba(139, 92, 246, 0.15));
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .banner-text {
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    .btn-open-app {
+      background: linear-gradient(135deg, #06b6d4, #3b82f6);
+      color: #ffffff;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: filter 0.2s;
+    }
+    .btn-open-app:hover {
+      filter: brightness(1.15);
+    }
+
     .media-list {
       padding: 10px;
-      max-height: 420px;
+      max-height: 440px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
@@ -58,7 +105,8 @@
       padding: 10px 12px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+      transition: border-color 0.2s;
     }
     .media-card:hover {
       border-color: #06b6d4;
@@ -79,22 +127,38 @@
     }
     .tag-group {
       display: flex;
+      align-items: center;
       gap: 6px;
     }
-    .tag {
-      background: rgba(6, 182, 212, 0.15);
-      color: #38bdf8;
+    .tag-quality {
+      background: #06b6d4;
+      color: #041017;
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .tag-format {
+      background: rgba(255, 255, 255, 0.08);
+      color: #94a3b8;
+      font-size: 10px;
       padding: 2px 6px;
       border-radius: 4px;
     }
     .size {
       color: #94a3b8;
     }
+    .save-to {
+      font-size: 10px;
+      color: #64748b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .action-group {
       display: flex;
       gap: 6px;
+      margin-top: 2px;
     }
     .btn-dl {
       flex: 1;
@@ -106,7 +170,7 @@
       font-weight: 700;
       padding: 6px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: all 0.15s;
     }
     .btn-dl:hover { background: #38bdf8; }
     .btn-copy {
@@ -119,6 +183,7 @@
       cursor: pointer;
     }
     .btn-copy:hover { background: #334155; color: #fff; }
+    
     .empty-box {
       padding: 40px 20px;
       text-align: center;
@@ -134,7 +199,17 @@
       <span class="brand-icon">⚡</span>
       <span class="brand-title">Pew Grabber</span>
     </div>
-    <span class="status-pill" id="media-count-badge">0 Media</span>
+    <div class="app-status status-offline" id="app-status-badge">
+      <span class="status-dot"></span>
+      <span id="app-status-text">Checking App...</span>
+    </div>
+  </div>
+
+  <div class="app-banner">
+    <span class="banner-text">Desktop download queue ready</span>
+    <button class="btn-open-app" id="btn-open-gui">
+      <span>⚡ Open Pew App</span>
+    </button>
   </div>
 
   <div class="media-list" id="media-list">

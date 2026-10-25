@@ -2,15 +2,34 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const listEl = document.getElementById('media-list');
   const emptyEl = document.getElementById('empty-box');
-  const countBadge = document.getElementById('media-count-badge');
+  const statusBadge = document.getElementById('app-status-badge');
+  const statusText = document.getElementById('app-status-text');
+  const openGuiBtn = document.getElementById('btn-open-gui');
 
-  // Query active tab
+  // Check connection to Pew Desktop App
+  chrome.runtime.sendMessage({ action: 'CHECK_PEW_STATUS' }, (res) => {
+    if (res && res.connected) {
+      statusBadge.className = 'app-status status-online';
+      statusText.textContent = 'Pew Connected';
+    } else {
+      statusBadge.className = 'app-status status-offline';
+      statusText.textContent = 'Pew Offline';
+    }
+  });
+
+  // Open Pew App button
+  openGuiBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' });
+    openGuiBtn.textContent = '✓ Opening...';
+    setTimeout(() => openGuiBtn.innerHTML = '<span>⚡ Open Pew App</span>', 2000);
+  });
+
+  // Query active tab media
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) return;
 
   chrome.runtime.sendMessage({ action: 'GET_TAB_MEDIA', tabId: tab.id }, (response) => {
     const media = (response && response.media) || [];
-    countBadge.textContent = `${media.length} Media`;
 
     if (media.length === 0) {
       emptyEl.style.display = 'block';
@@ -26,20 +45,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       const card = document.createElement('div');
       card.className = 'media-card';
 
-      const filename = getFilename(item.url, tab.title);
+      const quality = item.quality || 'Video';
+      const format = item.format || 'MP4';
+      const filename = getFilename(item.url, tab.title, quality, format);
       const sizeText = item.size > 0 ? formatBytes(item.size) : 'Stream';
 
       card.innerHTML = `
         <div class="media-title" title="${filename}">${filename}</div>
         <div class="media-meta">
           <div class="tag-group">
-            <span class="tag">${item.format}</span>
-            <span class="size">${sizeText}</span>
+            <span class="tag-quality">${quality}</span>
+            <span class="tag-format">${format}</span>
           </div>
+          <span class="size">${sizeText}</span>
         </div>
+        <div class="save-to">📁 Downloads\\${filename}</div>
         <div class="action-group">
-          <button class="btn-dl" title="Download via Pew">⚡ Download with Pew</button>
-          <button class="btn-copy" title="Copy Link">Copy</button>
+          <button class="btn-dl" title="Send to Pew Desktop App">⚡ Download with Pew</button>
+          <button class="btn-copy" title="Copy Stream URL">Copy</button>
         </div>
       `;
 
@@ -66,14 +89,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
-function getFilename(url, pageTitle) {
-  const cleanTitle = (pageTitle || '').replace(/[\\/:*?"<>|]/g, '_').substring(0, 35);
+function getFilename(url, pageTitle, quality, format) {
+  let title = (pageTitle || '').replace(/[\\/:*?"<>|]/g, '_').replace(/ - YouTube$/, '').trim();
+  title = title.substring(0, 45);
+
+  const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') ? 'm4a' : 'mp4';
+
+  if (title) {
+    return `${title}_${quality}.${ext}`;
+  }
+
   const cleanUrl = url.split('?')[0].split('#')[0];
   const name = cleanUrl.split('/').pop();
   if (name && name.includes('.')) {
-    return cleanTitle ? `${cleanTitle}_${name}` : name;
+    return name;
   }
-  return cleanTitle ? `${cleanTitle}.mp4` : 'video.mp4';
+
+  return `video_${quality}.${ext}`;
 }
 
 function formatBytes(bytes) {
