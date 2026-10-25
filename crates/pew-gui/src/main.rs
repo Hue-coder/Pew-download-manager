@@ -191,10 +191,23 @@ async fn convert_audio(ffmpeg_exe: &Path, in_path: &Path, out_path: &Path, targe
 }
 
 fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    let win = app.get_webview_window("main").or_else(|| {
+        app.webview_windows().into_values().next()
+    });
+
+    if let Some(window) = win {
         let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.set_always_on_top(true);
         let _ = window.set_focus();
+        let _ = window.set_always_on_top(false);
+    } else {
+        let _ = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+            .title("Pew Download Manager")
+            .inner_size(1080.0, 700.0)
+            .min_inner_size(850.0, 550.0)
+            .center()
+            .build();
     }
 }
 
@@ -997,10 +1010,19 @@ fn register_pew_protocol() {
 
 fn main() {
     if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:41738") {
-        use std::io::Write;
+        use std::io::{Read, Write};
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(800)));
         let _ = stream.write_all(b"GET /show HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         let _ = stream.flush();
-        return;
+
+        let mut buf = [0u8; 512];
+        if let Ok(n) = stream.read(&mut buf) {
+            let resp = String::from_utf8_lossy(&buf[..n]);
+            if resp.contains("200 OK") {
+                // Successfully notified running instance to show window
+                return;
+            }
+        }
     }
 
     register_pew_protocol();
