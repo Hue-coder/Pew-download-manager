@@ -1,0 +1,14 @@
+[package]
+name = "pew-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pew-core = { path = "../pew-core" }
+tokio.workspace = true
+clap.workspace = true
+indicatif.workspace = true
+anyhow.workspace = true
