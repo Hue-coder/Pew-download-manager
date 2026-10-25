@@ -49,6 +49,24 @@ pub struct AppState {
     pub settings: Arc<Mutex<AppSettings>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedFormat {
+    pub id: String,
+    pub quality: String,
+    pub format: String,
+    pub url: String,
+    pub size: u64,
+    pub media_type: String, // "video" or "audio"
+    pub filename: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaResolveResult {
+    pub success: bool,
+    pub title: String,
+    pub formats: Vec<ResolvedFormat>,
+}
+
 fn get_config_file_path() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         let p = PathBuf::from(appdata).join("PewDownloadManager");
@@ -74,6 +92,130 @@ fn save_settings_to_file(settings: &AppSettings) {
     if let Ok(json) = serde_json::to_string_pretty(settings) {
         let _ = std::fs::write(p, json);
     }
+}
+
+async fn resolve_media_options(url: &str) -> MediaResolveResult {
+    let url_owned = url.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        let output = std::process::Command::new("python")
+            .args(["-m", "yt_dlp", "-J", "--no-warnings", &url_owned])
+            .output();
+
+        if let Ok(o) = output {
+            if o.status.success() {
+                if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    let raw_title = data["title"].as_str().unwrap_or("Media_Video");
+                    let clean_title = raw_title.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_");
+
+                    let mut formats = Vec::new();
+                    let mut seen_heights = std::collections::HashSet::new();
+                    let mut audio_url = None;
+                    let mut audio_size = 0u64;
+
+                    if let Some(formats_arr) = data["formats"].as_array() {
+                        // Find highest bitrate audio stream
+                        for f in formats_arr.iter().rev() {
+                            if f["vcodec"].as_str().unwrap_or("") == "none" {
+                                if let Some(u) = f["url"].as_str() {
+                                    audio_url = Some(u.to_string());
+                                    audio_size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Collect target video resolutions in priority order: 4K, 2K, 1080p, 720p, 480p, 360p
+                        let target_heights = [2160, 1440, 1080, 720, 480, 360];
+                        for target_h in target_heights {
+                            for f in formats_arr {
+                                let h = f["height"].as_u64().unwrap_or(0);
+                                if h == target_h && !seen_heights.contains(&h) {
+                                    if let Some(u) = f["url"].as_str() {
+                                        seen_heights.insert(h);
+                                        let (tag, label) = match h {
+                                            2160 => ("4K", "4K Ultra HD (2160p)"),
+                                            1440 => ("2K", "2K Quad HD (1440p)"),
+                                            1080 => ("1080p", "1080p Full HD"),
+                                            720 => ("720p", "720p HD"),
+                                            480 => ("480p", "480p SD"),
+                                            _ => ("360p", "360p"),
+                                        };
+                                        let size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
+                                        formats.push(ResolvedFormat {
+                                            id: format!("vid_{}", h),
+                                            quality: label.to_string(),
+                                            format: "MP4".to_string(),
+                                            url: u.to_string(),
+                                            size,
+                                            media_type: "video".to_string(),
+                                            filename: format!("{}_{}.mp4", clean_title, tag),
+                                        });
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Audio Options (MP3, WAV, M4A)
+                        if let Some(a_url) = audio_url {
+                            formats.push(ResolvedFormat {
+                                id: "aud_mp3".to_string(),
+                                quality: "MP3 Audio (High Quality)".to_string(),
+                                format: "MP3".to_string(),
+                                url: a_url.clone(),
+                                size: audio_size,
+                                media_type: "audio".to_string(),
+                                filename: format!("{}_Audio.mp3", clean_title),
+                            });
+                            formats.push(ResolvedFormat {
+                                id: "aud_wav".to_string(),
+                                quality: "WAV Audio (Lossless)".to_string(),
+                                format: "WAV".to_string(),
+                                url: a_url.clone(),
+                                size: audio_size,
+                                media_type: "audio".to_string(),
+                                filename: format!("{}_Audio.wav", clean_title),
+                            });
+                            formats.push(ResolvedFormat {
+                                id: "aud_m4a".to_string(),
+                                quality: "M4A Audio (Original AAC)".to_string(),
+                                format: "M4A".to_string(),
+                                url: a_url,
+                                size: audio_size,
+                                media_type: "audio".to_string(),
+                                filename: format!("{}_Audio.m4a", clean_title),
+                            });
+                        }
+                    }
+
+                    if !formats.is_empty() {
+                        return MediaResolveResult {
+                            success: true,
+                            title: clean_title,
+                            formats,
+                        };
+                    }
+                }
+            }
+        }
+
+        MediaResolveResult {
+            success: false,
+            title: "Unknown Media".to_string(),
+            formats: Vec::new(),
+        }
+    }).await;
+
+    result.unwrap_or(MediaResolveResult {
+        success: false,
+        title: "Error".to_string(),
+        formats: Vec::new(),
+    })
+}
+
+#[tauri::command]
+async fn resolve_url_formats(url: String) -> Result<MediaResolveResult, String> {
+    Ok(resolve_media_options(&url).await)
 }
 
 #[tauri::command]
@@ -112,6 +254,18 @@ async fn select_folder() -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn probe_url(url: String) -> Result<ProbeResult, String> {
+    // If it's a video service link, try full resolution
+    let resolved = resolve_media_options(&url).await;
+    if resolved.success && !resolved.formats.is_empty() {
+        let first = &resolved.formats[0];
+        return Ok(ProbeResult {
+            url: first.url.clone(),
+            filename: first.filename.clone(),
+            content_length: if first.size > 0 { Some(first.size) } else { None },
+            accepts_ranges: true,
+        });
+    }
+
     let client = reqwest::Client::builder()
         .user_agent(pew_core::downloader::CHROME_USER_AGENT)
         .build()
@@ -367,7 +521,7 @@ fn start_local_rpc_server(
             let cfg_ref = settings_ref.clone();
 
             tauri::async_runtime::spawn(async move {
-                let mut buffer = [0u8; 8192];
+                let mut buffer = [0u8; 16384];
                 let n = match socket.read(&mut buffer).await {
                     Ok(n) if n > 0 => n,
                     _ => return,
@@ -412,6 +566,36 @@ Connection: close\r\n\r\n{}",
                     let _ = socket.write_all(resp.as_bytes()).await;
                     let _ = socket.flush().await;
                     return;
+                }
+
+                // Video/Audio Format Resolver Endpoint (4K, 2K, 1080p, 720p, 480p, 360p, MP3, WAV)
+                if first_line.contains("/resolve") {
+                    let mut media_url = None;
+                    if let Some(query_start) = first_line.find('?') {
+                        let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
+                        for param in query.split('&') {
+                            if let Some((k, v)) = param.split_once('=') {
+                                if k == "url" {
+                                    media_url = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                }
+                            }
+                        }
+                    } else if !body_part.trim().is_empty() {
+                        #[derive(Deserialize)]
+                        struct ResolvePayload { url: String }
+                        if let Ok(p) = serde_json::from_str::<ResolvePayload>(body_part.trim()) {
+                            media_url = Some(p.url);
+                        }
+                    }
+
+                    if let Some(url) = media_url {
+                        let resolved = resolve_media_options(&url).await;
+                        let json_resp = serde_json::to_string(&resolved).unwrap_or_else(|_| "{\"formats\":[]}".into());
+                        let resp = send_response(&json_resp);
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        let _ = socket.flush().await;
+                        return;
+                    }
                 }
 
                 if first_line.contains("/download") {
@@ -549,7 +733,8 @@ fn main() {
             delete_download,
             get_settings,
             save_settings,
-            select_folder
+            select_folder,
+            resolve_url_formats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

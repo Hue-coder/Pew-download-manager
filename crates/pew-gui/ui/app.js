@@ -130,10 +130,18 @@ function setupEventListeners() {
 
   // Start Download Button in Modal
   document.getElementById('modal-start-btn').addEventListener('click', async () => {
-    const url = modalUrlInput.value.trim();
+    let url = modalUrlInput.value.trim();
     if (!url) return;
 
-    const filename = modalFilenameInput.value.trim() || undefined;
+    let filename = modalFilenameInput.value.trim() || undefined;
+    if (modalResolvedFormats && modalResolvedFormats.length > 0 && modalFormatSelect) {
+      const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
+      if (chosen && chosen.url) {
+        url = chosen.url;
+        filename = chosen.filename;
+      }
+    }
+
     const parts = parseInt(modalPartsSlider.value, 10) || state.settings.max_connections || 8;
 
     try {
@@ -268,10 +276,17 @@ async function savePreferences() {
   }
 }
 
+const modalFormatSelect = document.getElementById('modal-format-select');
+const rowFormatSelect = document.getElementById('row-format-select');
+let modalResolvedFormats = [];
+
 function openModal() {
   addModal.classList.add('active');
   modalUrlInput.value = '';
   modalFilenameInput.value = '';
+  modalResolvedFormats = [];
+  if (rowFormatSelect) rowFormatSelect.style.display = 'none';
+  if (modalFormatSelect) modalFormatSelect.innerHTML = '';
   probeInfo.style.display = 'none';
   probeLoading.style.display = 'none';
   modalUrlInput.focus();
@@ -291,8 +306,47 @@ function closeModal() {
 async function triggerProbe(url) {
   probeLoading.style.display = 'flex';
   probeInfo.style.display = 'none';
+  if (rowFormatSelect) rowFormatSelect.style.display = 'none';
+  modalResolvedFormats = [];
 
   if (invoke) {
+    try {
+      // 1. Try full multi-format resolution first (for YouTube, Vimeo, social platforms)
+      const resData = await invoke('resolve_url_formats', { url });
+      if (resData && resData.success && Array.isArray(resData.formats) && resData.formats.length > 0) {
+        modalResolvedFormats = resData.formats;
+        if (modalFormatSelect && rowFormatSelect) {
+          modalFormatSelect.innerHTML = '';
+          resData.formats.forEach((f, idx) => {
+            const opt = document.createElement('option');
+            opt.value = idx;
+            const sizeStr = f.size > 0 ? ` (${formatBytes(f.size)})` : '';
+            opt.textContent = `${f.quality} - ${f.format}${sizeStr}`;
+            modalFormatSelect.appendChild(opt);
+          });
+          rowFormatSelect.style.display = 'flex';
+
+          modalFormatSelect.onchange = () => {
+            const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
+            if (chosen) {
+              modalFilenameInput.value = chosen.filename;
+              probeSize.textContent = chosen.size > 0 ? formatBytes(chosen.size) : 'Stream';
+            }
+          };
+        }
+
+        const first = resData.formats[0];
+        modalFilenameInput.value = first.filename;
+        probeSize.textContent = first.size > 0 ? formatBytes(first.size) : 'Available';
+        probeRanges.textContent = 'Supported (Multi-thread)';
+        probeRanges.className = 'val badge-success';
+        probeLoading.style.display = 'none';
+        probeInfo.style.display = 'flex';
+        return;
+      }
+    } catch (e) {}
+
+    // 2. Regular direct URL probe fallback
     try {
       const res = await invoke('probe_url', { url });
       modalFilenameInput.value = res.filename;

@@ -6,33 +6,94 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('app-status-text');
   const openGuiBtn = document.getElementById('btn-open-gui');
 
+  let currentMedia = [];
+  let currentFilter = 'all';
+
   // Check connection to Pew Desktop App
-  chrome.runtime.sendMessage({ action: 'CHECK_PEW_STATUS' }, (res) => {
-    if (res && res.connected) {
-      statusBadge.className = 'app-status status-online';
-      statusText.textContent = 'Pew Connected';
-    } else {
-      statusBadge.className = 'app-status status-offline';
-      statusText.textContent = 'Pew Offline';
-    }
-  });
+  function checkPewStatus() {
+    fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(1000) })
+      .then(r => r.json())
+      .then(() => {
+        statusBadge.className = 'app-status status-online';
+        statusText.textContent = 'Pew Connected';
+      })
+      .catch(() => {
+        statusBadge.className = 'app-status status-offline';
+        statusText.textContent = 'Pew Offline';
+      });
+  }
+
+  checkPewStatus();
 
   // Open Pew App button
   openGuiBtn.addEventListener('click', () => {
-    chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' });
+    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {});
     openGuiBtn.textContent = '✓ Opening...';
-    setTimeout(() => openGuiBtn.innerHTML = '<span>⚡ Open Pew App</span>', 2000);
+    setTimeout(() => openGuiBtn.innerHTML = '<span>🖥️ Open Pew App</span>', 2000);
   });
 
-  // Query active tab media
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id) return;
+  // Tab Filtering
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFilter = btn.dataset.tab;
+      renderMediaCards();
+    });
+  });
 
-  chrome.runtime.sendMessage({ action: 'GET_TAB_MEDIA', tabId: tab.id }, (response) => {
-    const media = (response && response.media) || [];
+  // Query active tab
+  let [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!activeTab || !activeTab.url) return;
 
-    if (media.length === 0) {
-      emptyEl.style.display = 'block';
+  const tabUrl = activeTab.url;
+
+  // 1. Try direct resolve via local Pew Core
+  try {
+    const resolveResp = await fetch(`http://127.0.0.1:41738/resolve?url=${encodeURIComponent(tabUrl)}`, {
+      signal: AbortSignal.timeout(6000)
+    });
+    if (resolveResp.ok) {
+      const data = await resolveResp.json();
+      if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
+        currentMedia = data.formats.map(f => ({
+          id: f.id,
+          url: f.url,
+          filename: f.filename,
+          format: f.format,
+          quality: f.quality,
+          mediaType: f.media_type,
+          size: f.size || 0
+        }));
+        renderMediaCards();
+        return;
+      }
+    }
+  } catch (e) {}
+
+  // 2. Fallback to background store
+  if (activeTab.id) {
+    chrome.runtime.sendMessage({ action: 'GET_TAB_MEDIA', tabId: activeTab.id }, (response) => {
+      const media = (response && response.media) || [];
+      if (media.length > 0) {
+        currentMedia = media;
+        renderMediaCards();
+      } else {
+        emptyEl.style.display = 'flex';
+        listEl.style.display = 'none';
+      }
+    });
+  }
+
+  function renderMediaCards() {
+    const filtered = currentMedia.filter(item => {
+      if (currentFilter === 'video') return item.mediaType === 'video';
+      if (currentFilter === 'audio') return item.mediaType === 'audio';
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      emptyEl.style.display = 'flex';
       listEl.style.display = 'none';
       return;
     }
@@ -41,24 +102,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     listEl.style.display = 'flex';
     listEl.innerHTML = '';
 
-    media.forEach((item) => {
+    filtered.forEach((item) => {
       const card = document.createElement('div');
       card.className = 'media-card';
 
-      const quality = item.quality || 'Video';
+      const quality = item.quality || 'Media Stream';
       const format = item.format || 'MP4';
-      const filename = item.filename || getFilename(item.url, tab.title, quality, format);
-      const isCombined = item.mediaType === 'combined';
+      const filename = item.filename || `${activeTab.title || 'video'}_${quality}.${format.toLowerCase()}`;
       const sizeText = item.size > 0 ? formatBytes(item.size) : '';
+
+      // Quality badge style
+      let badgeStyle = 'background: #06b6d4; color: #041017;';
+      if (quality.includes('4K') || quality.includes('2160')) {
+        badgeStyle = 'background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; font-weight: bold;';
+      } else if (quality.includes('2K') || quality.includes('1440')) {
+        badgeStyle = 'background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: #fff; font-weight: bold;';
+      } else if (quality.includes('1080')) {
+        badgeStyle = 'background: #0284c7; color: #fff; font-weight: bold;';
+      } else if (quality.includes('720')) {
+        badgeStyle = 'background: #10b981; color: #fff;';
+      } else if (quality.includes('MP3')) {
+        badgeStyle = 'background: #ec4899; color: #fff; font-weight: bold;';
+      } else if (quality.includes('WAV')) {
+        badgeStyle = 'background: #f43f5e; color: #fff; font-weight: bold;';
+      }
 
       card.innerHTML = `
         <div class="media-title" title="${filename}">${filename}</div>
         <div class="media-meta">
           <div class="tag-group">
-            <span class="tag-quality" style="${isCombined ? 'background: #10b981; color: #fff;' : ''}">${quality}</span>
+            <span class="tag-quality" style="${badgeStyle}">${quality}</span>
             <span class="tag-format">${format}</span>
-            ${sizeText ? `<span class="tag-size" style="color: #06b6d4; font-size: 0.75rem; font-family: monospace; font-weight: bold;">${sizeText}</span>` : ''}
           </div>
+          ${sizeText ? `<span class="tag-size">${sizeText}</span>` : ''}
         </div>
         <div class="save-to">📁 Downloads\\${filename}</div>
         <div class="action-group">
@@ -68,14 +144,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       `;
 
       card.querySelector('.btn-dl').addEventListener('click', () => {
-        chrome.runtime.sendMessage({
-          action: 'TRIGGER_PEW_DOWNLOAD',
-          url: item.url,
-          filename: filename
+        fetch('http://127.0.0.1:41738/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: item.url,
+            filename: filename,
+            referer: tabUrl,
+            user_agent: navigator.userAgent,
+            parts: 8
+          })
+        }).catch(() => {
+          chrome.downloads.download({ url: item.url, filename, saveAs: true });
         });
+
         const btn = card.querySelector('.btn-dl');
         btn.textContent = '✓ Sent to Pew!';
-        setTimeout(() => btn.textContent = '⚡ Download with Pew', 2000);
+        btn.style.background = '#10b981';
+        btn.style.color = '#fff';
+        setTimeout(() => {
+          btn.textContent = '⚡ Download with Pew';
+          btn.style.background = '#06b6d4';
+          btn.style.color = '#041017';
+        }, 2000);
       });
 
       card.querySelector('.btn-copy').addEventListener('click', () => {
@@ -87,27 +178,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       listEl.appendChild(card);
     });
-  });
-});
-
-function getFilename(url, pageTitle, quality, format) {
-  let title = (pageTitle || '').replace(/[\\/:*?"<>|]/g, '_').replace(/ - YouTube$/, '').trim();
-  title = title.substring(0, 45);
-
-  const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') || format.toLowerCase().includes('opus') ? 'm4a' : 'mp4';
-  const tag = quality.split(' ')[0].replace(/[^a-zA-Z0-9]/g, '');
-
-  if (title) {
-    return `${title}_${tag}.${ext}`;
   }
 
-  return `video_${tag}.${ext}`;
-}
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+});

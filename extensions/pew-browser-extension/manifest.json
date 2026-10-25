@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Pew Download Manager Integration",
-  "version": "1.1.0",
-  "description": "XDM-style automatic download catcher and media stream grabber for Pew",
+  "version": "1.2.0",
+  "description": "IDM/XDM style automatic download catcher with 4K/2K/1080p video and MP3/WAV options",
   "permissions": [
+    "tabs",
     "webRequest",
     "storage",
     "activeTab",

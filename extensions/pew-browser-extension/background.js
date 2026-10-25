@@ -1,8 +1,7 @@
-// Pew Integration Background Service Worker (Robust Media Sniffer & Resolver)
-const detectedMedia = new Map(); // tabId -> Array of media streams
-const resolvedYouTubeTabs = new Map(); // tabId -> last resolved videoId
+// Pew Integration Background Service Worker (Robust Media Resolver & Sniffer)
+const tabMediaStore = new Map(); // tabId -> Array of media items
 
-// 1. AUTOMATIC DOWNLOAD INTERCEPTION (IDM / XDM Style)
+// 1. Automatic Download Interception
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const url = downloadItem.finalUrl || downloadItem.url;
   if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('chrome:')) {
@@ -30,122 +29,102 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       });
     }
   } catch (e) {
-    // Pew desktop app is offline, browser handles download normally
+    // Desktop app offline, browser handles normally
   }
 });
 
-// 2. YOUTUBE VIDEO RESOLVER (Direct Progressive & Adaptive Extraction)
-async function resolveYouTubeVideo(videoId, tabId, tabTitle) {
-  if (!videoId) return;
+// 2. Resolve media options via Pew Desktop Core
+async function resolvePageMedia(url, tabId, pageTitle) {
+  if (!url || !url.startsWith('http')) return [];
 
   try {
-    const resp = await fetch('https://www.youtube.com/youtubei/v1/player', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        videoId: videoId,
-        context: {
-          client: {
-            clientName: 'ANDROID_VR',
-            clientVersion: '1.58.18'
-          }
-        }
-      })
-    });
+    const resolveEndpoint = `http://127.0.0.1:41738/resolve?url=${encodeURIComponent(url)}`;
+    const resp = await fetch(resolveEndpoint, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return [];
 
     const data = await resp.json();
-    if (!data || !data.streamingData) return;
+    if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
+      const items = data.formats.map((f, idx) => ({
+        id: f.id || `fmt_${idx}_${Date.now()}`,
+        url: f.url,
+        filename: f.filename,
+        format: f.format,
+        quality: f.quality,
+        mediaType: f.media_type,
+        size: f.size || 0,
+        priority: getQualityPriority(f.quality),
+        timestamp: Date.now()
+      }));
 
-    const baseTitle = (data.videoDetails && data.videoDetails.title) 
-      ? data.videoDetails.title.replace(/[\\/:*?"<>|]/g, '_')
-      : (tabTitle || 'YouTube_Video').replace(/[\\/:*?"<>|]/g, '_');
+      items.sort((a, b) => a.priority - b.priority);
+      tabMediaStore.set(tabId, items);
 
-    const items = [];
-
-    // A. Progressive formats (Contains combined Video + Audio)
-    const progFormats = data.streamingData.formats || [];
-    for (const f of progFormats) {
-      if (f.url) {
-        const quality = f.qualityLabel || '360p';
-        items.push({
-          id: `yt_prog_${f.itag}_${videoId}`,
-          url: f.url,
-          filename: `${baseTitle}_${quality}.mp4`,
-          format: 'MP4',
-          quality: `${quality} (Video + Audio)`,
-          mediaType: 'combined',
-          size: parseInt(f.contentLength || '0', 10),
-          priority: 1,
-          timestamp: Date.now()
-        });
-      }
+      updateBadge(tabId, items.length);
+      notifyTab(tabId, items);
+      return items;
     }
-
-    // B. High-resolution adaptive formats (1080p, 720p, etc.)
-    const adaptFormats = data.streamingData.adaptiveFormats || [];
-    const seenQualities = new Set();
-
-    for (const f of adaptFormats) {
-      if (!f.url) continue;
-      const mime = (f.mimeType || '').toLowerCase();
-      const isVideo = mime.startsWith('video/');
-      const isAudio = mime.startsWith('audio/');
-
-      if (isVideo) {
-        const quality = f.qualityLabel || 'HD';
-        const isMp4 = mime.includes('mp4');
-        const key = `${quality}_${isMp4 ? 'mp4' : 'webm'}`;
-
-        if (!seenQualities.has(key)) {
-          seenQualities.add(key);
-          const ext = isMp4 ? 'mp4' : 'webm';
-          const priority = quality.includes('1080') ? 2 : (quality.includes('720') ? 3 : 4);
-
-          items.push({
-            id: `yt_adapt_${f.itag}_${videoId}`,
-            url: f.url,
-            filename: `${baseTitle}_${quality}.${ext}`,
-            format: ext.toUpperCase(),
-            quality: `${quality} (${ext.toUpperCase()})`,
-            mediaType: 'video',
-            size: parseInt(f.contentLength || '0', 10),
-            priority: priority,
-            timestamp: Date.now()
-          });
-        }
-      } else if (isAudio) {
-        const isM4a = mime.includes('mp4');
-        const key = isM4a ? 'm4a' : 'opus';
-
-        if (!seenQualities.has(key)) {
-          seenQualities.add(key);
-          const ext = isM4a ? 'm4a' : 'opus';
-          const kbps = Math.round((f.bitrate || 128000) / 1000);
-
-          items.push({
-            id: `yt_audio_${f.itag}_${videoId}`,
-            url: f.url,
-            filename: `${baseTitle}_Audio_${kbps}k.${ext}`,
-            format: isM4a ? 'M4A' : 'AUDIO',
-            quality: `Audio (${kbps}k ${ext.toUpperCase()})`,
-            mediaType: 'audio',
-            size: parseInt(f.contentLength || '0', 10),
-            priority: 5,
-            timestamp: Date.now()
-          });
-        }
-      }
-    }
-
-    for (const it of items) {
-      addMediaForTab(tabId, it);
-    }
-  } catch (err) {
-    console.warn('Pew YouTube resolver error:', err);
+  } catch (e) {
+    // Local app not ready or network timeout
   }
+  return [];
 }
 
-// 3. NETWORK TRAFFIC SNIFFER (Generic Sites & Streams)
+function getQualityPriority(q) {
+  if (q.includes('4K') || q.includes('2160')) return 1;
+  if (q.includes('2K') || q.includes('1440')) return 2;
+  if (q.includes('1080')) return 3;
+  if (q.includes('720')) return 4;
+  if (q.includes('480')) return 5;
+  if (q.includes('360')) return 6;
+  if (q.includes('MP3')) return 7;
+  if (q.includes('WAV')) return 8;
+  if (q.includes('M4A')) return 9;
+  return 10;
+}
+
+function updateBadge(tabId, count) {
+  try {
+    if (count > 0) {
+      chrome.action.setBadgeText({ tabId, text: String(count) });
+      chrome.action.setBadgeBackgroundColor({ tabId, color: '#06b6d4' });
+    } else {
+      chrome.action.setBadgeText({ tabId, text: '' });
+    }
+  } catch (e) {}
+}
+
+function notifyTab(tabId, mediaList) {
+  try {
+    chrome.tabs.sendMessage(tabId, {
+      action: 'PEW_MEDIA_FOUND',
+      allMedia: mediaList
+    }).catch(() => {});
+  } catch (e) {}
+}
+
+// 3. Tab Lifecycle Monitoring
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading') {
+    tabMediaStore.delete(tabId);
+    updateBadge(tabId, 0);
+  }
+
+  const url = (tab && tab.url) || '';
+  if (changeInfo.status === 'complete' && url.startsWith('http')) {
+    resolvePageMedia(url, tabId, tab.title);
+  }
+});
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const media = tabMediaStore.get(activeInfo.tabId) || [];
+  updateBadge(activeInfo.tabId, media.length);
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabMediaStore.delete(tabId);
+});
+
+// 4. Network Sniffer Fallback
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (!details.tabId || details.tabId < 0) return;
@@ -162,95 +141,54 @@ chrome.webRequest.onHeadersReceived.addListener(
       else if (name === 'content-length') contentLength = parseInt(h.value || '0', 10);
     }
 
-    // A. Detect HLS (.m3u8) Streams across any site
-    if (url.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/x-mpegurl')) {
-      const item = {
+    if (url.includes('.m3u8') || contentType.includes('mpegurl')) {
+      addDirectMediaItem(details.tabId, {
         id: 'hls_' + hashStr(url),
         url: url,
         filename: 'stream.mp4',
         format: 'HLS Stream',
         quality: 'Video Stream (.m3u8)',
-        mediaType: 'combined',
+        mediaType: 'video',
         size: 0,
-        priority: 1,
+        priority: 4,
         timestamp: Date.now()
-      };
-      addMediaForTab(details.tabId, item);
+      });
       return;
     }
 
-    // B. Detect Direct Video MIME types or Extensions
     const cleanUrl = url.split('?')[0].toLowerCase();
     const hasVideoExt = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv', '.ts'].some(e => cleanUrl.endsWith(e));
-    const isVideoMime = contentType.startsWith('video/') && !contentType.includes('html');
-
-    if (hasVideoExt || isVideoMime) {
-      // Ignore tiny previews / tracker gifs
+    if (hasVideoExt || (contentType.startsWith('video/') && !contentType.includes('html'))) {
       if (contentLength > 0 && contentLength < 100 * 1024) return;
-      if (url.includes('googlevideo.com')) return; // YouTube handled cleanly by resolver
+      if (url.includes('googlevideo.com')) return;
 
       const ext = cleanUrl.includes('.') ? cleanUrl.split('.').pop().toUpperCase() : 'MP4';
-      const item = {
+      addDirectMediaItem(details.tabId, {
         id: 'vid_' + hashStr(url),
         url: url,
         filename: cleanUrl.split('/').pop() || 'video.mp4',
-        format: ext.length <= 4 ? ext : 'MP4',
-        quality: 'Video File',
-        mediaType: 'combined',
+        format: ext,
+        quality: 'Video (' + ext + ')',
+        mediaType: 'video',
         size: contentLength,
-        priority: 1,
+        priority: 4,
         timestamp: Date.now()
-      };
-      addMediaForTab(details.tabId, item);
-      return;
-    }
-
-    // C. Detect Audio Streams
-    const hasAudioExt = ['.mp3', '.m4a', '.aac', '.flac', '.wav', '.ogg'].some(e => cleanUrl.endsWith(e));
-    if (hasAudioExt || (contentType.startsWith('audio/') && !contentType.includes('html'))) {
-      if (contentLength > 0 && contentLength < 80 * 1024) return;
-      if (url.includes('googlevideo.com')) return;
-
-      const ext = cleanUrl.includes('.') ? cleanUrl.split('.').pop().toUpperCase() : 'AUDIO';
-      const item = {
-        id: 'aud_' + hashStr(url),
-        url: url,
-        filename: cleanUrl.split('/').pop() || 'audio.mp3',
-        format: ext.length <= 4 ? ext : 'AUDIO',
-        quality: 'Audio File',
-        mediaType: 'audio',
-        size: contentLength,
-        priority: 6,
-        timestamp: Date.now()
-      };
-      addMediaForTab(details.tabId, item);
+      });
     }
   },
   { urls: ['<all_urls>'] },
   ['responseHeaders']
 );
 
-function addMediaForTab(tabId, item) {
-  let list = detectedMedia.get(tabId) || [];
-
-  const idx = list.findIndex(m => m.id === item.id || (m.quality === item.quality && m.format === item.format));
-  if (idx >= 0) {
-    list[idx] = item;
-  } else {
+function addDirectMediaItem(tabId, item) {
+  let list = tabMediaStore.get(tabId) || [];
+  if (!list.some(m => m.id === item.id || m.url === item.url)) {
     list.push(item);
+    list.sort((a, b) => a.priority - b.priority);
+    tabMediaStore.set(tabId, list);
+    updateBadge(tabId, list.length);
+    notifyTab(tabId, list);
   }
-
-  list.sort((a, b) => (a.priority || 99) - (b.priority || 99));
-  detectedMedia.set(tabId, list);
-
-  chrome.action.setBadgeText({ tabId, text: String(list.length) });
-  chrome.action.setBadgeBackgroundColor({ tabId, color: '#06b6d4' });
-
-  chrome.tabs.sendMessage(tabId, {
-    action: 'PEW_MEDIA_FOUND',
-    mediaCount: list.length,
-    allMedia: list
-  }).catch(() => {});
 }
 
 function hashStr(str) {
@@ -262,56 +200,23 @@ function hashStr(str) {
   return Math.abs(h);
 }
 
-// 4. Tab Navigation and Lifecycle
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'loading') {
-    detectedMedia.delete(tabId);
-    chrome.action.setBadgeText({ tabId, text: '' });
-  }
-
-  // Check for YouTube navigation
-  const currentUrl = tab.url || '';
-  if (currentUrl.includes('youtube.com/watch') || currentUrl.includes('youtu.be/')) {
-    const vMatch = currentUrl.match(/[?&]v=([a-zA-Z0-9_-]+)/) || currentUrl.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
-    if (vMatch && vMatch[1]) {
-      const vid = vMatch[1];
-      if (resolvedYouTubeTabs.get(tabId) !== vid) {
-        resolvedYouTubeTabs.set(tabId, vid);
-        resolveYouTubeVideo(vid, tabId, tab.title);
-      }
-    }
-  }
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  detectedMedia.delete(tabId);
-  resolvedYouTubeTabs.delete(tabId);
-});
-
-// 5. Runtime Messages
+// 5. Messaging API
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const tabId = (sender.tab && sender.tab.id) || message.tabId;
+
   if (message.action === 'GET_TAB_MEDIA') {
-    const tabId = message.tabId || (sender.tab && sender.tab.id);
-    const media = detectedMedia.get(tabId) || [];
+    const media = tabMediaStore.get(tabId) || [];
     sendResponse({ media });
     return true;
   }
 
-  if (message.action === 'RESOLVE_YOUTUBE') {
-    const tabId = (sender.tab && sender.tab.id) || message.tabId;
-    if (message.videoId && tabId) {
-      resolveYouTubeVideo(message.videoId, tabId, message.title);
+  if (message.action === 'REQUEST_RESOLVE') {
+    if (message.url && tabId) {
+      resolvePageMedia(message.url, tabId, message.title).then(items => {
+        sendResponse({ media: items });
+      });
+      return true;
     }
-    sendResponse({ ok: true });
-    return true;
-  }
-
-  if (message.action === 'MEDIA_FROM_DOM') {
-    if (sender.tab && sender.tab.id && message.item) {
-      addMediaForTab(sender.tab.id, message.item);
-    }
-    sendResponse({ ok: true });
-    return true;
   }
 
   if (message.action === 'SHOW_PEW_APP') {
@@ -330,14 +235,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'TRIGGER_PEW_DOWNLOAD') {
     const { url, filename } = message;
-
     fetch('http://127.0.0.1:41738/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         url: url,
         filename: filename,
-        referer: url.includes('googlevideo.com') ? 'https://www.youtube.com/' : (sender.tab ? sender.tab.url : ''),
+        referer: sender.tab ? sender.tab.url : '',
         user_agent: navigator.userAgent,
         parts: 8
       })
@@ -345,7 +249,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     .then(r => r.json())
     .then(() => sendResponse({ success: true }))
     .catch(() => {
-      // Pew desktop app not reachable: trigger native browser save
       chrome.downloads.download({ url, filename, saveAs: true });
       sendResponse({ success: true });
     });

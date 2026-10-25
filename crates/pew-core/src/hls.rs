@@ -10,10 +10,14 @@ use url::Url;
 use crate::error::{PewError, Result};
 use crate::downloader::{apply_media_headers, DownloadConfig, DownloadEvent};
 
-/// Check if a URL or content-type points to an HLS manifest (.m3u8)
+/// Check if a URL or content points to an HLS manifest (.m3u8)
 pub fn is_hls_url(url: &str) -> bool {
     let lower = url.to_lowercase();
-    lower.contains(".m3u8") || lower.contains("format=m3u8")
+    lower.contains(".m3u8") 
+        || lower.contains("format=m3u8") 
+        || lower.contains("/hls_playlist/") 
+        || lower.contains("/hls/") 
+        || lower.contains("manifest/hls")
 }
 
 pub struct HlsDownloader {

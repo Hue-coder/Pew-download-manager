@@ -1,85 +1,116 @@
 // Pew In-Page Video Grabber (Content Script)
 (function() {
+  // Clean up any existing widget from previous reloads to prevent zombie widgets
+  const oldWidget = document.getElementById('pew-floating-widget');
+  if (oldWidget) oldWidget.remove();
+
   let mediaList = [];
   let panelContainer = null;
   let dropdownMenu = null;
+  let activeTabFilter = 'all'; // 'all', 'video', 'audio'
 
-  // 1. Initial query to background
-  chrome.runtime.sendMessage({ action: 'GET_TAB_MEDIA' }, (res) => {
-    if (res && res.media && res.media.length > 0) {
-      mediaList = res.media;
-      renderOrUpdateFloatingPanel();
-    }
-  });
-
-  // 2. YouTube SPA navigation detection
-  function checkYouTubePage() {
-    const href = window.location.href;
-    if (href.includes('youtube.com/watch') || href.includes('youtu.be/')) {
-      const match = href.match(/[?&]v=([a-zA-Z0-9_-]+)/) || href.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
-      if (match && match[1]) {
-        chrome.runtime.sendMessage({
-          action: 'RESOLVE_YOUTUBE',
-          videoId: match[1],
-          title: document.title
+  // Safe Extension Messaging (immune to "Extension context invalidated")
+  function safeSendMessage(msg, callback) {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+        chrome.runtime.sendMessage(msg, (res) => {
+          if (chrome.runtime.lastError) {
+            // Context was invalidated during flight
+            if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
+              directHttpDownload(msg.url, msg.filename);
+            }
+            return;
+          }
+          if (callback) callback(res);
         });
+      } else {
+        if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
+          directHttpDownload(msg.url, msg.filename);
+        }
+      }
+    } catch (e) {
+      if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
+        directHttpDownload(msg.url, msg.filename);
       }
     }
   }
 
-  // Trigger on load and on YouTube's SPA navigation event
-  checkYouTubePage();
-  window.addEventListener('yt-navigate-finish', checkYouTubePage);
-  window.addEventListener('popstate', checkYouTubePage);
+  function directHttpDownload(url, filename) {
+    fetch('http://127.0.0.1:41738/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: url,
+        filename: filename,
+        referer: window.location.href,
+        user_agent: navigator.userAgent,
+        parts: 8
+      })
+    }).catch(err => {
+      console.warn('Direct Pew download failed:', err);
+    });
+  }
 
-  // 3. Listen to updates from background
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.action === 'PEW_MEDIA_FOUND') {
-      mediaList = message.allMedia || [];
-      renderOrUpdateFloatingPanel();
-    }
-  });
+  // 1. Resolve media via local Pew resolver or background
+  async function queryMedia() {
+    const pageUrl = window.location.href;
+    if (!pageUrl.startsWith('http')) return;
 
-  // 4. Directly inspect HTML5 <video> and <audio> elements on the page
-  function inspectVideos() {
-    if (window.location.host.includes('youtube.com')) return; // YouTube handled cleanly by resolver
+    // Direct local resolve
+    try {
+      const resp = await fetch(`http://127.0.0.1:41738/resolve?url=${encodeURIComponent(pageUrl)}`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
+          mediaList = data.formats.map(f => ({
+            id: f.id,
+            url: f.url,
+            filename: f.filename,
+            format: f.format,
+            quality: f.quality,
+            mediaType: f.media_type,
+            size: f.size,
+          }));
+          renderOrUpdateFloatingPanel();
+          return;
+        }
+      }
+    } catch (e) {}
 
-    const videos = document.querySelectorAll('video, audio');
-    videos.forEach((video) => {
-      const src = video.currentSrc || video.src;
-      if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
-        const isAudio = video.tagName === 'AUDIO';
-        const height = video.videoHeight;
-        let quality = isAudio ? 'Audio Stream' : 'Video Stream';
-        if (height >= 1080) quality = '1080p Full HD';
-        else if (height >= 720) quality = '720p HD';
-        else if (height >= 480) quality = '480p';
-        else if (height >= 360) quality = '360p';
-
-        const item = {
-          id: 'dom_' + hashStr(src),
-          url: src,
-          filename: (document.title || 'video').replace(/[\\/:*?"<>|]/g, '_') + (isAudio ? '.mp3' : '.mp4'),
-          format: isAudio ? 'AUDIO' : 'MP4',
-          quality: quality,
-          mediaType: isAudio ? 'audio' : 'combined',
-          size: 0,
-          priority: 1,
-          timestamp: Date.now()
-        };
-
-        chrome.runtime.sendMessage({ action: 'MEDIA_FROM_DOM', item }, () => {});
+    // Fallback to background query
+    safeSendMessage({ action: 'GET_TAB_MEDIA' }, (res) => {
+      if (res && res.media && res.media.length > 0) {
+        mediaList = res.media;
+        renderOrUpdateFloatingPanel();
+      } else {
+        safeSendMessage({ action: 'REQUEST_RESOLVE', url: pageUrl, title: document.title }, (r2) => {
+          if (r2 && r2.media && r2.media.length > 0) {
+            mediaList = r2.media;
+            renderOrUpdateFloatingPanel();
+          }
+        });
       }
     });
   }
 
-  document.addEventListener('play', (e) => {
-    if (e.target && (e.target.tagName === 'VIDEO' || e.target.tagName === 'AUDIO')) {
-      setTimeout(inspectVideos, 500);
-    }
-  }, true);
+  // Initial query and navigation handlers
+  queryMedia();
+  window.addEventListener('yt-navigate-finish', () => setTimeout(queryMedia, 600));
+  window.addEventListener('popstate', () => setTimeout(queryMedia, 600));
 
-  setInterval(inspectVideos, 4000);
+  // Listen to background broadcast
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+      chrome.runtime.onMessage.addListener((message) => {
+        if (message.action === 'PEW_MEDIA_FOUND') {
+          mediaList = message.allMedia || [];
+          renderOrUpdateFloatingPanel();
+        }
+      });
+    }
+  } catch (e) {}
 
   function renderOrUpdateFloatingPanel() {
     if (mediaList.length === 0) return;
@@ -105,7 +136,7 @@
     panelContainer.innerHTML = `
       <div class="pew-pill-btn">
         <span class="pew-icon">⚡</span>
-        <span class="pew-label">Download Video</span>
+        <span class="pew-label">Download Media</span>
         <span class="pew-badge">${mediaList.length}</span>
       </div>
       <div class="pew-dropdown" style="display: none;">
@@ -113,6 +144,11 @@
           <span>⚡ Pew Media Grabber (${mediaList.length})</span>
           <button class="pew-open-app-btn" title="Open Desktop App">🖥️ Open Pew</button>
           <button class="pew-close-btn">&times;</button>
+        </div>
+        <div class="pew-filter-tabs">
+          <button class="pew-tab-btn active" data-tab="all">All (${mediaList.length})</button>
+          <button class="pew-tab-btn" data-tab="video">🎬 Video (4K/2K/1080p)</button>
+          <button class="pew-tab-btn" data-tab="audio">🎵 Audio (MP3/WAV)</button>
         </div>
         <div class="pew-dropdown-list"></div>
       </div>
@@ -138,7 +174,18 @@
 
     openAppBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' });
+      safeSendMessage({ action: 'SHOW_PEW_APP' });
+    });
+
+    // Tab buttons
+    panelContainer.querySelectorAll('.pew-tab-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        panelContainer.querySelectorAll('.pew-tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        activeTabFilter = btn.dataset.tab;
+        renderDropdownItems();
+      });
     });
 
     document.addEventListener('click', (e) => {
@@ -155,23 +202,49 @@
     const listEl = dropdownMenu.querySelector('.pew-dropdown-list');
     listEl.innerHTML = '';
 
-    mediaList.forEach((item) => {
+    const filtered = mediaList.filter(item => {
+      if (activeTabFilter === 'video') return item.mediaType === 'video';
+      if (activeTabFilter === 'audio') return item.mediaType === 'audio';
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: #94a3b8; font-size: 0.85rem;">No formats available for this tab</div>';
+      return;
+    }
+
+    filtered.forEach((item) => {
       const itemEl = document.createElement('div');
       itemEl.className = 'pew-media-item';
 
-      const quality = item.quality || 'Video';
+      const quality = item.quality || 'Media Stream';
       const format = item.format || 'MP4';
-      const cleanName = item.filename || getSuggestedFilename(item.url, quality, format);
-      const isCombined = item.mediaType === 'combined';
+      const cleanName = item.filename || `${document.title || 'video'}_${format.toLowerCase()}.${format.toLowerCase()}`;
       const sizeText = item.size > 0 ? formatBytes(item.size) : '';
+
+      // Distinct badge color
+      let badgeStyle = 'background: #06b6d4; color: #fff;';
+      if (quality.includes('4K') || quality.includes('2160')) {
+        badgeStyle = 'background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; font-weight: bold;';
+      } else if (quality.includes('2K') || quality.includes('1440')) {
+        badgeStyle = 'background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: #fff; font-weight: bold;';
+      } else if (quality.includes('1080')) {
+        badgeStyle = 'background: #0284c7; color: #fff; font-weight: bold;';
+      } else if (quality.includes('720')) {
+        badgeStyle = 'background: #10b981; color: #fff;';
+      } else if (quality.includes('MP3')) {
+        badgeStyle = 'background: #ec4899; color: #fff; font-weight: bold;';
+      } else if (quality.includes('WAV')) {
+        badgeStyle = 'background: #f43f5e; color: #fff; font-weight: bold;';
+      }
 
       itemEl.innerHTML = `
         <div class="pew-item-info">
           <div class="pew-item-title" title="${cleanName}">${cleanName}</div>
           <div class="pew-item-meta">
-            <span class="pew-format-tag" style="${isCombined ? 'background: #10b981; color: #fff;' : ''}">${quality}</span>
+            <span class="pew-format-tag" style="${badgeStyle}">${quality}</span>
             <span class="pew-format-sub">${format}</span>
-            ${sizeText ? `<span class="pew-format-size" style="color: #06b6d4; font-size: 0.75rem; font-family: monospace;">${sizeText}</span>` : ''}
+            ${sizeText ? `<span class="pew-format-size" style="color: #38bdf8; font-size: 0.75rem; font-family: monospace; font-weight: 600;">${sizeText}</span>` : ''}
           </div>
           <div class="pew-save-location">📁 Downloads\\${cleanName}</div>
         </div>
@@ -181,8 +254,9 @@
         </div>
       `;
 
-      itemEl.querySelector('.pew-action-download').addEventListener('click', () => {
-        chrome.runtime.sendMessage({
+      itemEl.querySelector('.pew-action-download').addEventListener('click', (e) => {
+        e.stopPropagation();
+        safeSendMessage({
           action: 'TRIGGER_PEW_DOWNLOAD',
           url: item.url,
           filename: cleanName
@@ -190,10 +264,15 @@
 
         const dlBtn = itemEl.querySelector('.pew-action-download');
         dlBtn.textContent = '✓ Sent!';
-        setTimeout(() => dlBtn.textContent = '⚡ Download', 2000);
+        dlBtn.style.background = '#10b981';
+        setTimeout(() => {
+          dlBtn.textContent = '⚡ Download';
+          dlBtn.style.background = '';
+        }, 2000);
       });
 
-      itemEl.querySelector('.pew-action-copy').addEventListener('click', () => {
+      itemEl.querySelector('.pew-action-copy').addEventListener('click', (e) => {
+        e.stopPropagation();
         navigator.clipboard.writeText(item.url);
         const copyBtn = itemEl.querySelector('.pew-action-copy');
         copyBtn.textContent = '✓';
@@ -204,35 +283,12 @@
     });
   }
 
-  function getSuggestedFilename(url, quality, format) {
-    let title = document.title ? document.title.replace(/[\\/:*?"<>|]/g, '_').replace(/ - YouTube$/, '').trim() : '';
-    title = title.substring(0, 45);
-
-    const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') || format.toLowerCase().includes('opus') ? 'm4a' : 'mp4';
-    const tag = quality.split(' ')[0].replace(/[^a-zA-Z0-9]/g, '');
-
-    if (title) {
-      return `${title}_${tag}.${ext}`;
-    }
-
-    return `video_${tag}.${ext}`;
-  }
-
   function formatBytes(bytes) {
     if (!bytes || bytes === 0) return '';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
-
-  function hashStr(str) {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) {
-      h = ((h << 5) - h) + str.charCodeAt(i);
-      h |= 0;
-    }
-    return Math.abs(h);
   }
 
   function makeDraggable(container, handle) {
