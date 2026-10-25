@@ -11,6 +11,8 @@ use crate::chunk::{calculate_chunks, Chunk};
 use crate::error::{PewError, Result};
 use crate::metadata::RemoteFileInfo;
 
+pub const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 #[derive(Debug, Clone)]
 pub struct DownloadConfig {
     pub parts: usize,
@@ -22,7 +24,7 @@ impl Default for DownloadConfig {
     fn default() -> Self {
         Self {
             parts: 8,
-            user_agent: "PewDownloadManager/0.1.0".to_string(),
+            user_agent: CHROME_USER_AGENT.to_string(),
             timeout_secs: 30,
         }
     }
@@ -100,6 +102,11 @@ impl Downloader {
             info.content_length.unwrap_or(0)
         };
 
+        if total == 0 {
+            let _ = tokio::fs::remove_file(&target_path).await;
+            return Err(PewError::Custom("Downloaded file is empty (0 bytes received from server)".to_string()));
+        }
+
         if let Some(ref tx) = event_sender {
             let _ = tx.send(DownloadEvent::Completed {
                 path: target_path.clone(),
@@ -137,7 +144,7 @@ impl Downloader {
                 let mut last_time = Instant::now();
 
                 while is_running_clone.load(Ordering::Relaxed) {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                     let current_bytes = counter_clone.load(Ordering::Relaxed);
                     let elapsed = last_time.elapsed().as_secs_f64();
 
@@ -183,6 +190,12 @@ impl Downloader {
         is_running.store(false, Ordering::Relaxed);
         let _ = speed_tx.send(());
 
+        let final_downloaded = downloaded_counter.load(Ordering::Relaxed);
+        if final_downloaded == 0 {
+            let _ = tokio::fs::remove_file(target_path).await;
+            return Err(PewError::Custom("Multi-segmented download received 0 bytes".to_string()));
+        }
+
         Ok(())
     }
 
@@ -194,11 +207,9 @@ impl Downloader {
         downloaded_counter: Arc<AtomicU64>,
     ) -> Result<()> {
         let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
-        let resp = client
-            .get(&url)
-            .header("Range", range_header)
-            .send()
-            .await?;
+        let req = client.get(&url).header("Range", range_header);
+        let req = apply_media_headers(req, &url);
+        let resp = req.send().await?;
 
         if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
             return Err(PewError::HttpStatus(resp.status()));
@@ -230,7 +241,9 @@ impl Downloader {
         total_size: Option<u64>,
         event_sender: &Option<mpsc::UnboundedSender<DownloadEvent>>,
     ) -> Result<()> {
-        let resp = self.client.get(url).send().await?;
+        let req = self.client.get(url);
+        let req = apply_media_headers(req, url);
+        let resp = req.send().await?;
         if !resp.status().is_success() {
             return Err(PewError::HttpStatus(resp.status()));
         }
@@ -248,7 +261,7 @@ impl Downloader {
 
             if let Some(ref tx) = event_sender {
                 let elapsed = last_time.elapsed().as_secs_f64();
-                if elapsed >= 0.5 {
+                if elapsed >= 0.3 {
                     let speed_bps = ((downloaded - last_bytes) as f64) / elapsed;
                     let _ = tx.send(DownloadEvent::Progress {
                         downloaded,
@@ -262,6 +275,26 @@ impl Downloader {
         }
 
         file.flush().await?;
+
+        if downloaded == 0 {
+            let _ = tokio::fs::remove_file(target_path).await;
+            return Err(PewError::Custom("Server closed stream with 0 bytes downloaded".to_string()));
+        }
+
         Ok(())
     }
+}
+
+pub fn apply_media_headers(builder: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+    let mut b = builder
+        .header("User-Agent", CHROME_USER_AGENT)
+        .header("Accept", "*/*")
+        .header("Accept-Language", "en-US,en;q=0.9");
+
+    if url.contains("googlevideo.com") || url.contains("youtube.com") {
+        b = b.header("Referer", "https://www.youtube.com/")
+             .header("Origin", "https://www.youtube.com");
+    }
+
+    b
 }

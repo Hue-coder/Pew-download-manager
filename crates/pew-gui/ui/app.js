@@ -196,7 +196,7 @@ function matchesFilter(item) {
     case 'downloading':
       return item.status === 'Downloading' || item.status === 'Starting';
     case 'completed':
-      return item.status === 'Completed';
+      return item.status === 'Completed' && item.downloaded_bytes > 0;
     case 'video':
       return ['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext);
     case 'compressed':
@@ -239,14 +239,28 @@ function updateRow(item) {
 function getRowHtml(item) {
   const total = item.total_bytes || 0;
   const downloaded = item.downloaded_bytes || 0;
-  const pct = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
+  const pct = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : (item.status === 'Completed' ? 100 : 0);
   const icon = getFileIcon(item.filename);
 
   let statusClass = 'downloading';
-  if (item.status === 'Completed') statusClass = 'completed';
-  else if (item.status === 'Error') statusClass = 'error';
+  let statusText = item.status;
+  if (item.status === 'Completed') {
+    statusClass = 'completed';
+    statusText = 'Completed';
+  } else if (item.status === 'Error') {
+    statusClass = 'error';
+    statusText = item.error ? `Error: ${item.error.substring(0, 30)}` : 'Error';
+  }
 
   const locationHint = item.target_path || `Saving to Downloads\\${item.filename}`;
+
+  const sizeDisplay = total > 0 
+    ? formatBytes(total) 
+    : (downloaded > 0 ? formatBytes(downloaded) : 'Connecting...');
+
+  const progressHtml = total > 0
+    ? `<span>${pct}%</span><span>${formatBytes(downloaded)} / ${formatBytes(total)}</span>`
+    : `<span>${item.status}</span><span>${formatBytes(downloaded)}</span>`;
 
   return `
     <td>
@@ -254,19 +268,18 @@ function getRowHtml(item) {
         <span class="file-icon">${icon}</span>
         <div class="file-info">
           <span class="file-name" title="${item.filename}">${item.filename}</span>
-          <span class="file-url" title="${locationHint}">${locationHint}</span>
+          <span class="file-url" title="${item.error || locationHint}">${item.error ? '⚠️ ' + item.error : locationHint}</span>
         </div>
       </div>
     </td>
-    <td>${total > 0 ? formatBytes(total) : 'Calculating...'}</td>
+    <td>${sizeDisplay}</td>
     <td>
       <div class="progress-wrapper">
         <div class="progress-info">
-          <span>${pct}%</span>
-          <span>${formatBytes(downloaded)} / ${total > 0 ? formatBytes(total) : '?'}</span>
+          ${progressHtml}
         </div>
         <div class="progress-track">
-          <div class="progress-fill" style="width: ${pct}%"></div>
+          <div class="progress-fill" style="width: ${total > 0 ? pct : (downloaded > 0 ? 100 : 0)}%"></div>
         </div>
       </div>
     </td>
@@ -274,7 +287,7 @@ function getRowHtml(item) {
       ${item.speed_bps > 0 ? formatSpeed(item.speed_bps) : '-'}
     </td>
     <td>
-      <span class="status-badge ${statusClass}">${item.status}</span>
+      <span class="status-badge ${statusClass}" title="${item.error || item.status}">${statusText}</span>
     </td>
     <td>
       <div class="action-btn-cell">

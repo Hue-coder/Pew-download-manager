@@ -67,9 +67,17 @@ chrome.webRequest.onHeadersReceived.addListener(
         mediaType = 'audio';
       }
 
+      // Strip chunk range parameters so Pew downloads the complete video file
+      const fullMediaUrl = url.replace(/([?&])range=\d+-\d+(&|$)/g, '$1')
+                              .replace(/([?&])rn=\d+(&|$)/g, '$1')
+                              .replace(/([?&])alr=yes(&|$)/g, '$1')
+                              .replace(/&&+/g, '&')
+                              .replace(/\?&/, '?')
+                              .replace(/[?&]$/, '');
+
       const item = {
         id: `yt_${itag || 'stream'}_${details.tabId}`,
-        url: url,
+        url: fullMediaUrl,
         contentType: contentType,
         size: contentLength,
         format: format,

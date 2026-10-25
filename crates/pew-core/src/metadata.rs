@@ -16,16 +16,27 @@ impl RemoteFileInfo {
     pub async fn probe(client: &Client, url: &str) -> Result<Self> {
         let parsed_url = Url::parse(url).map_err(|e| PewError::InvalidUrl(e.to_string()))?;
         
-        // Try HEAD first; some servers don't support HEAD, so fall back to a 1-byte GET Range if needed
-        let response = match client.head(url).send().await {
+        // Try HEAD first with browser headers; if failed, fall back to Range 0-0 GET
+        let head_req = client.head(url)
+            .header("User-Agent", crate::downloader::CHROME_USER_AGENT)
+            .header("Referer", if url.contains("googlevideo.com") { "https://www.youtube.com/" } else { "" });
+
+        let response = match head_req.send().await {
             Ok(resp) if resp.status().is_success() => resp,
             _ => {
-                client.get(url)
-                    .header("Range", "bytes=0-0")
-                    .send()
-                    .await?
+                let mut get_req = client.get(url)
+                    .header("User-Agent", crate::downloader::CHROME_USER_AGENT)
+                    .header("Range", "bytes=0-0");
+                if url.contains("googlevideo.com") {
+                    get_req = get_req.header("Referer", "https://www.youtube.com/");
+                }
+                get_req.send().await?
             }
         };
+
+        if !response.status().is_success() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+            return Err(PewError::HttpStatus(response.status()));
+        }
 
         let headers = response.headers();
 
