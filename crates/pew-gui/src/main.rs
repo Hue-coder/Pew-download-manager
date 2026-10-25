@@ -289,6 +289,7 @@ Connection: close\r\n\r\n{}",
                     struct RpcDownloadPayload {
                         url: String,
                         filename: Option<String>,
+                        #[allow(dead_code)]
                         parts: Option<usize>,
                     }
 
