@@ -7,10 +7,21 @@ const listen = tauri ? (tauri.event ? tauri.event.listen : null) : null;
 const state = {
   downloads: new Map(),
   activeFilter: 'all',
+  currentView: 'downloads', // 'downloads' or 'settings'
   searchQuery: '',
+  settings: {
+    download_dir: '',
+    max_connections: 8,
+    auto_start: true,
+    open_folder_on_finish: false,
+    user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  }
 };
 
 // DOM Elements
+const downloadsView = document.getElementById('downloads-view');
+const settingsView = document.getElementById('settings-view');
+const btnViewDownloads = document.getElementById('btn-view-downloads');
 const bodyEl = document.getElementById('downloads-body');
 const emptyStateEl = document.getElementById('empty-state');
 const addModal = document.getElementById('add-modal');
@@ -24,28 +35,74 @@ const probeSize = document.getElementById('probe-size');
 const probeRanges = document.getElementById('probe-ranges');
 const globalSpeedEl = document.getElementById('global-speed');
 const activeTasksLabel = document.getElementById('active-tasks-label');
+const topSearchBox = document.getElementById('top-search-box');
+const savePathIndicator = document.getElementById('save-path-indicator');
+
+// Settings DOM Elements
+const settingDownloadDir = document.getElementById('setting-download-dir');
+const settingMaxConnections = document.getElementById('setting-max-connections');
+const settingThreadsVal = document.getElementById('setting-threads-val');
+const settingAutoStart = document.getElementById('setting-auto-start');
+const settingOpenFolder = document.getElementById('setting-open-folder');
+const settingUa = document.getElementById('setting-ua');
+const btnSaveSettings = document.getElementById('btn-save-settings');
+const saveStatusMsg = document.getElementById('save-status-msg');
+const btnBrowseDir = document.getElementById('btn-browse-dir');
+const btnOpenCurrentDir = document.getElementById('btn-open-current-dir');
+const btnOpenDlDir = document.getElementById('btn-open-dl-dir');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   setupTauriListeners();
+  loadInitialSettings();
   loadInitialDownloads();
 
-  // Periodic polling fallback in case IPC events were missed
+  // Periodic polling fallback
   setInterval(() => {
     loadInitialDownloads();
   }, 2000);
 });
 
 function setupEventListeners() {
+  // Navigation / Filter buttons
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      if (btn.dataset.view === 'settings') {
+        showSettingsView();
+      } else {
+        showDownloadsView();
+        state.activeFilter = btn.dataset.filter || 'all';
+        renderTable();
+      }
+    });
+  });
+
+  btnViewDownloads.addEventListener('click', () => {
+    showDownloadsView();
+    const allBtn = document.querySelector('.nav-item[data-filter="all"]');
+    if (allBtn) {
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      allBtn.classList.add('active');
+    }
+  });
+
   // Modal toggles
   document.getElementById('btn-add-modal').addEventListener('click', () => openModal());
   document.getElementById('modal-close-btn').addEventListener('click', () => closeModal());
   document.getElementById('modal-cancel-btn').addEventListener('click', () => closeModal());
 
-  // Slider
+  // Slider in Modal
   modalPartsSlider.addEventListener('input', (e) => {
     partsValLabel.textContent = e.target.value;
+  });
+
+  // Slider in Settings
+  settingMaxConnections.addEventListener('input', (e) => {
+    settingThreadsVal.textContent = e.target.value;
   });
 
   // Paste clipboard
@@ -71,32 +128,28 @@ function setupEventListeners() {
     }
   });
 
-  // Start Download Button
+  // Start Download Button in Modal
   document.getElementById('modal-start-btn').addEventListener('click', async () => {
     const url = modalUrlInput.value.trim();
     if (!url) return;
 
     const filename = modalFilenameInput.value.trim() || undefined;
-    const parts = parseInt(modalPartsSlider.value, 10) || 8;
+    const parts = parseInt(modalPartsSlider.value, 10) || state.settings.max_connections || 8;
 
     try {
       if (invoke) {
-        await invoke('start_download', { url, filename, parts });
+        await invoke('start_download', { 
+          url, 
+          filename, 
+          parts,
+          outputDir: state.settings.download_dir || undefined 
+        });
       }
       closeModal();
+      showDownloadsView();
     } catch (err) {
       alert('Failed to start download: ' + err);
     }
-  });
-
-  // Filter Buttons
-  document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      state.activeFilter = btn.dataset.filter || 'all';
-      renderTable();
-    });
   });
 
   // Search
@@ -104,6 +157,115 @@ function setupEventListeners() {
     state.searchQuery = e.target.value.toLowerCase().trim();
     renderTable();
   });
+
+  // Settings Actions
+  btnBrowseDir.addEventListener('click', async () => {
+    if (invoke) {
+      try {
+        const chosen = await invoke('select_folder');
+        if (chosen) {
+          settingDownloadDir.value = chosen;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  });
+
+  btnOpenCurrentDir.addEventListener('click', () => {
+    const dir = settingDownloadDir.value.trim() || state.settings.download_dir;
+    if (dir && invoke) {
+      invoke('open_in_folder', { path: dir });
+    }
+  });
+
+  btnOpenDlDir.addEventListener('click', () => {
+    const dir = state.settings.download_dir;
+    if (dir && invoke) {
+      invoke('open_in_folder', { path: dir });
+    }
+  });
+
+  btnSaveSettings.addEventListener('click', async () => {
+    await savePreferences();
+  });
+}
+
+function showSettingsView() {
+  state.currentView = 'settings';
+  downloadsView.style.display = 'none';
+  settingsView.style.display = 'block';
+  btnViewDownloads.style.display = 'inline-flex';
+  topSearchBox.style.display = 'none';
+}
+
+function showDownloadsView() {
+  state.currentView = 'downloads';
+  settingsView.style.display = 'none';
+  downloadsView.style.display = 'block';
+  btnViewDownloads.style.display = 'none';
+  topSearchBox.style.display = 'flex';
+}
+
+async function loadInitialSettings() {
+  if (invoke) {
+    try {
+      const cfg = await invoke('get_settings');
+      if (cfg) {
+        state.settings = cfg;
+        settingDownloadDir.value = cfg.download_dir || '';
+        settingMaxConnections.value = cfg.max_connections || 8;
+        settingThreadsVal.textContent = cfg.max_connections || 8;
+        modalPartsSlider.value = cfg.max_connections || 8;
+        partsValLabel.textContent = cfg.max_connections || 8;
+        settingAutoStart.checked = cfg.auto_start !== false;
+        settingOpenFolder.checked = cfg.open_folder_on_finish === true;
+        settingUa.value = cfg.user_agent || state.settings.user_agent;
+
+        if (cfg.download_dir) {
+          const shortPath = cfg.download_dir.length > 25 
+            ? '...' + cfg.download_dir.substring(cfg.download_dir.length - 22)
+            : cfg.download_dir;
+          savePathIndicator.textContent = `📁 ${shortPath}`;
+          savePathIndicator.title = cfg.download_dir;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load settings:', e);
+    }
+  }
+}
+
+async function savePreferences() {
+  const newSettings = {
+    download_dir: settingDownloadDir.value.trim(),
+    max_connections: parseInt(settingMaxConnections.value, 10) || 8,
+    auto_start: settingAutoStart.checked,
+    open_folder_on_finish: settingOpenFolder.checked,
+    user_agent: settingUa.value,
+  };
+
+  if (invoke) {
+    try {
+      await invoke('save_settings', { settings: newSettings });
+      state.settings = newSettings;
+
+      if (newSettings.download_dir) {
+        const shortPath = newSettings.download_dir.length > 25 
+          ? '...' + newSettings.download_dir.substring(newSettings.download_dir.length - 22)
+          : newSettings.download_dir;
+        savePathIndicator.textContent = `📁 ${shortPath}`;
+        savePathIndicator.title = newSettings.download_dir;
+      }
+
+      saveStatusMsg.style.display = 'inline-block';
+      setTimeout(() => {
+        saveStatusMsg.style.display = 'none';
+      }, 2500);
+    } catch (e) {
+      alert('Failed to save settings: ' + e);
+    }
+  }
 }
 
 function openModal() {
@@ -134,8 +296,8 @@ async function triggerProbe(url) {
     try {
       const res = await invoke('probe_url', { url });
       modalFilenameInput.value = res.filename;
-      probeSize.textContent = res.content_length ? formatBytes(res.content_length) : 'Unknown';
-      probeRanges.textContent = res.accepts_ranges ? 'Supported (Multi-thread)' : 'Single stream only';
+      probeSize.textContent = res.content_length ? formatBytes(res.content_length) : 'Unknown (Stream)';
+      probeRanges.textContent = res.accepts_ranges ? 'Supported (Multi-thread)' : 'Single stream';
       probeRanges.className = res.accepts_ranges ? 'val badge-success' : 'val';
       probeLoading.style.display = 'none';
       probeInfo.style.display = 'flex';
@@ -170,6 +332,8 @@ async function loadInitialDownloads() {
 }
 
 function renderTable() {
+  if (state.currentView !== 'downloads') return;
+
   bodyEl.innerHTML = '';
   const filtered = Array.from(state.downloads.values()).filter(matchesFilter);
 
@@ -198,7 +362,7 @@ function matchesFilter(item) {
     case 'completed':
       return item.status === 'Completed' && item.downloaded_bytes > 0;
     case 'video':
-      return ['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext);
+      return ['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'm4v', 'flv'].includes(ext);
     case 'compressed':
       return ['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext);
     case 'document':
@@ -249,10 +413,11 @@ function getRowHtml(item) {
     statusText = 'Completed';
   } else if (item.status === 'Error') {
     statusClass = 'error';
-    statusText = item.error ? `Error: ${item.error.substring(0, 30)}` : 'Error';
+    statusText = item.error ? `Error` : 'Error';
   }
 
-  const locationHint = item.target_path || `Saving to Downloads\\${item.filename}`;
+  const defaultSaveDir = state.settings.download_dir || 'Downloads';
+  const locationHint = item.target_path || `${defaultSaveDir}\\${item.filename}`;
 
   const sizeDisplay = total > 0 
     ? formatBytes(total) 
@@ -292,6 +457,7 @@ function getRowHtml(item) {
     <td>
       <div class="action-btn-cell">
         ${item.status === 'Completed' && item.target_path ? `
+          <button class="icon-action-btn btn-play" title="Open / Play File">▶️</button>
           <button class="icon-action-btn btn-open" title="Open in File Explorer">📂</button>
         ` : ''}
         <button class="icon-action-btn btn-del" title="Remove from list">🗑️</button>
@@ -301,6 +467,13 @@ function getRowHtml(item) {
 }
 
 function attachRowEvents(row, item) {
+  const playBtn = row.querySelector('.btn-play');
+  if (playBtn && item.target_path) {
+    playBtn.addEventListener('click', () => {
+      if (invoke) invoke('open_file', { path: item.target_path });
+    });
+  }
+
   const openBtn = row.querySelector('.btn-open');
   if (openBtn && item.target_path) {
     openBtn.addEventListener('click', () => {
@@ -310,7 +483,10 @@ function attachRowEvents(row, item) {
 
   const delBtn = row.querySelector('.btn-del');
   if (delBtn) {
-    delBtn.addEventListener('click', () => {
+    delBtn.addEventListener('click', async () => {
+      if (invoke) {
+        await invoke('delete_download', { id: item.id, deleteFile: false });
+      }
       state.downloads.delete(item.id);
       row.remove();
       if (bodyEl.children.length === 0) emptyStateEl.style.display = 'flex';
@@ -341,8 +517,8 @@ function updateGlobalMetrics() {
 function getFileIcon(filename) {
   const ext = (filename || '').split('.').pop().toLowerCase();
   if (['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext)) return '🗜️';
-  if (['mp4', 'mkv', 'avi', 'mov', 'webm'].includes(ext)) return '🎬';
-  if (['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(ext)) return '🎵';
+  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'm4v'].includes(ext)) return '🎬';
+  if (['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus'].includes(ext)) return '🎵';
   if (['pdf', 'docx', 'doc', 'txt'].includes(ext)) return '📄';
   if (['exe', 'msi', 'dmg', 'apk'].includes(ext)) return '💻';
   if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return '🖼️';

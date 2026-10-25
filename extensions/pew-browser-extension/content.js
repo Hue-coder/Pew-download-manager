@@ -12,7 +12,27 @@
     }
   });
 
-  // 2. Listen to updates from background
+  // 2. YouTube SPA navigation detection
+  function checkYouTubePage() {
+    const href = window.location.href;
+    if (href.includes('youtube.com/watch') || href.includes('youtu.be/')) {
+      const match = href.match(/[?&]v=([a-zA-Z0-9_-]+)/) || href.match(/youtu\.be\/([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        chrome.runtime.sendMessage({
+          action: 'RESOLVE_YOUTUBE',
+          videoId: match[1],
+          title: document.title
+        });
+      }
+    }
+  }
+
+  // Trigger on load and on YouTube's SPA navigation event
+  checkYouTubePage();
+  window.addEventListener('yt-navigate-finish', checkYouTubePage);
+  window.addEventListener('popstate', checkYouTubePage);
+
+  // 3. Listen to updates from background
   chrome.runtime.onMessage.addListener((message) => {
     if (message.action === 'PEW_MEDIA_FOUND') {
       mediaList = message.allMedia || [];
@@ -20,14 +40,17 @@
     }
   });
 
-  // 3. Directly inspect HTML5 <video> elements on the page
+  // 4. Directly inspect HTML5 <video> and <audio> elements on the page
   function inspectVideos() {
-    const videos = document.querySelectorAll('video');
+    if (window.location.host.includes('youtube.com')) return; // YouTube handled cleanly by resolver
+
+    const videos = document.querySelectorAll('video, audio');
     videos.forEach((video) => {
       const src = video.currentSrc || video.src;
       if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+        const isAudio = video.tagName === 'AUDIO';
         const height = video.videoHeight;
-        let quality = 'Video';
+        let quality = isAudio ? 'Audio Stream' : 'Video Stream';
         if (height >= 1080) quality = '1080p Full HD';
         else if (height >= 720) quality = '720p HD';
         else if (height >= 480) quality = '480p';
@@ -36,9 +59,10 @@
         const item = {
           id: 'dom_' + hashStr(src),
           url: src,
-          format: 'MP4',
+          filename: (document.title || 'video').replace(/[\\/:*?"<>|]/g, '_') + (isAudio ? '.mp3' : '.mp4'),
+          format: isAudio ? 'AUDIO' : 'MP4',
           quality: quality,
-          mediaType: 'combined',
+          mediaType: isAudio ? 'audio' : 'combined',
           size: 0,
           priority: 1,
           timestamp: Date.now()
@@ -49,15 +73,13 @@
     });
   }
 
-  // Monitor video play events
   document.addEventListener('play', (e) => {
-    if (e.target && e.target.tagName === 'VIDEO') {
+    if (e.target && (e.target.tagName === 'VIDEO' || e.target.tagName === 'AUDIO')) {
       setTimeout(inspectVideos, 500);
     }
   }, true);
 
-  // Periodic poll for dynamic players
-  setInterval(inspectVideos, 3000);
+  setInterval(inspectVideos, 4000);
 
   function renderOrUpdateFloatingPanel() {
     if (mediaList.length === 0) return;
@@ -88,8 +110,8 @@
       </div>
       <div class="pew-dropdown" style="display: none;">
         <div class="pew-dropdown-header">
-          <span>⚡ Detected Media (${mediaList.length})</span>
-          <button class="pew-open-app-btn" title="Open Desktop App">🖥️ Open App</button>
+          <span>⚡ Pew Media Grabber (${mediaList.length})</span>
+          <button class="pew-open-app-btn" title="Open Desktop App">🖥️ Open Pew</button>
           <button class="pew-close-btn">&times;</button>
         </div>
         <div class="pew-dropdown-list"></div>
@@ -139,8 +161,9 @@
 
       const quality = item.quality || 'Video';
       const format = item.format || 'MP4';
-      const cleanName = getSuggestedFilename(item.url, quality, format);
+      const cleanName = item.filename || getSuggestedFilename(item.url, quality, format);
       const isCombined = item.mediaType === 'combined';
+      const sizeText = item.size > 0 ? formatBytes(item.size) : '';
 
       itemEl.innerHTML = `
         <div class="pew-item-info">
@@ -148,6 +171,7 @@
           <div class="pew-item-meta">
             <span class="pew-format-tag" style="${isCombined ? 'background: #10b981; color: #fff;' : ''}">${quality}</span>
             <span class="pew-format-sub">${format}</span>
+            ${sizeText ? `<span class="pew-format-size" style="color: #06b6d4; font-size: 0.75rem; font-family: monospace;">${sizeText}</span>` : ''}
           </div>
           <div class="pew-save-location">📁 Downloads\\${cleanName}</div>
         </div>
@@ -192,6 +216,14 @@
     }
 
     return `video_${tag}.${ext}`;
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
   function hashStr(str) {

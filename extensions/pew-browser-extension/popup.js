@@ -47,8 +47,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       const quality = item.quality || 'Video';
       const format = item.format || 'MP4';
-      const filename = getFilename(item.url, tab.title, quality, format);
+      const filename = item.filename || getFilename(item.url, tab.title, quality, format);
       const isCombined = item.mediaType === 'combined';
+      const sizeText = item.size > 0 ? formatBytes(item.size) : '';
 
       card.innerHTML = `
         <div class="media-title" title="${filename}">${filename}</div>
@@ -56,6 +57,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <div class="tag-group">
             <span class="tag-quality" style="${isCombined ? 'background: #10b981; color: #fff;' : ''}">${quality}</span>
             <span class="tag-format">${format}</span>
+            ${sizeText ? `<span class="tag-size" style="color: #06b6d4; font-size: 0.75rem; font-family: monospace; font-weight: bold;">${sizeText}</span>` : ''}
           </div>
         </div>
         <div class="save-to">📁 Downloads\\${filename}</div>
@@ -100,4 +102,12 @@ function getFilename(url, pageTitle, quality, format) {
   }
 
   return `video_${tag}.${ext}`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }

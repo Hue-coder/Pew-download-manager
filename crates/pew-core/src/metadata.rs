@@ -2,6 +2,7 @@ use reqwest::header::{ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, ETAG};
 use reqwest::Client;
 use url::Url;
 use crate::error::{PewError, Result};
+use crate::youtube::{extract_youtube_video_id, resolve_youtube_stream};
 
 #[derive(Debug, Clone)]
 pub struct RemoteFileInfo {
@@ -14,6 +15,19 @@ pub struct RemoteFileInfo {
 
 impl RemoteFileInfo {
     pub async fn probe(client: &Client, url: &str) -> Result<Self> {
+        // If it's a YouTube watch link, resolve stream directly
+        if let Some(vid) = extract_youtube_video_id(url) {
+            if let Ok(yt) = resolve_youtube_stream(client, &vid).await {
+                return Ok(Self {
+                    url: yt.url,
+                    filename: format!("{}_{}.mp4", yt.title, yt.quality),
+                    content_length: yt.content_length,
+                    accepts_ranges: true,
+                    etag: None,
+                });
+            }
+        }
+
         let parsed_url = Url::parse(url).map_err(|e| PewError::InvalidUrl(e.to_string()))?;
         
         // Try HEAD first with browser headers; if failed, fall back to Range 0-0 GET

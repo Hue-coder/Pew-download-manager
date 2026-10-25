@@ -23,15 +23,97 @@ pub struct DownloadItem {
     pub error: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub download_dir: String,
+    pub max_connections: usize,
+    pub auto_start: bool,
+    pub open_folder_on_finish: bool,
+    pub user_agent: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            download_dir: dirs_fallback().to_string_lossy().to_string(),
+            max_connections: 8,
+            auto_start: true,
+            open_folder_on_finish: false,
+            user_agent: pew_core::downloader::CHROME_USER_AGENT.to_string(),
+        }
+    }
+}
+
 pub struct AppState {
     pub downloads: Arc<Mutex<HashMap<String, DownloadItem>>>,
+    pub settings: Arc<Mutex<AppSettings>>,
+}
+
+fn get_config_file_path() -> PathBuf {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("PewDownloadManager");
+        let _ = std::fs::create_dir_all(&p);
+        p.join("settings.json")
+    } else {
+        PathBuf::from("pew_settings.json")
+    }
+}
+
+fn load_saved_settings() -> AppSettings {
+    let p = get_config_file_path();
+    if let Ok(content) = std::fs::read_to_string(&p) {
+        if let Ok(s) = serde_json::from_str::<AppSettings>(&content) {
+            return s;
+        }
+    }
+    AppSettings::default()
+}
+
+fn save_settings_to_file(settings: &AppSettings) {
+    let p = get_config_file_path();
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = std::fs::write(p, json);
+    }
+}
+
+#[tauri::command]
+async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+    let s = state.settings.lock().await;
+    Ok(s.clone())
+}
+
+#[tauri::command]
+async fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Result<(), String> {
+    save_settings_to_file(&settings);
+    let mut s = state.settings.lock().await;
+    *s = settings;
+    Ok(())
+}
+
+#[tauri::command]
+async fn select_folder() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Default Download Folder'; if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }"])
+            .output();
+        match output {
+            Ok(o) => {
+                let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !path.is_empty() {
+                    Ok(Some(path))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn probe_url(url: String) -> Result<ProbeResult, String> {
     let client = reqwest::Client::builder()
-        .user_agent("PewDownloadManager/0.1.0")
+        .user_agent(pew_core::downloader::CHROME_USER_AGENT)
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -62,7 +144,39 @@ async fn start_download(
     output_dir: Option<String>,
     parts: Option<usize>,
 ) -> Result<String, String> {
-    start_download_internal(app, state.downloads.clone(), url, filename, output_dir, parts, None, None, None).await
+    let current_settings = {
+        let s = state.settings.lock().await;
+        s.clone()
+    };
+
+    let resolved_out_dir = output_dir.unwrap_or(current_settings.download_dir);
+    let resolved_parts = parts.unwrap_or(current_settings.max_connections);
+
+    start_download_internal(
+        app,
+        state.downloads.clone(),
+        url,
+        filename,
+        Some(resolved_out_dir),
+        Some(resolved_parts),
+        None,
+        None,
+        Some(current_settings.user_agent),
+        current_settings.open_folder_on_finish,
+    ).await
+}
+
+#[tauri::command]
+async fn delete_download(state: State<'_, AppState>, id: String, delete_file: bool) -> Result<(), String> {
+    let mut map = state.downloads.lock().await;
+    if let Some(item) = map.remove(&id) {
+        if delete_file {
+            if let Some(target) = item.target_path {
+                let _ = tokio::fs::remove_file(target).await;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn start_download_internal(
@@ -75,6 +189,7 @@ async fn start_download_internal(
     cookies: Option<String>,
     referer: Option<String>,
     user_agent: Option<String>,
+    open_folder_on_finish: bool,
 ) -> Result<String, String> {
     let id = format!("dl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     let parts = parts.unwrap_or(8).clamp(1, 32);
@@ -157,6 +272,9 @@ async fn start_download_internal(
                             item.speed_bps = 0.0;
                             let _ = app_listener.emit("download-update", item.clone());
                         }
+                        if open_folder_on_finish {
+                            let _ = open_in_folder(path.to_string_lossy().to_string());
+                        }
                     }
                     DownloadEvent::Error(err) => {
                         let mut map = dl_state.lock().await;
@@ -206,6 +324,18 @@ fn open_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn dirs_fallback() -> PathBuf {
     if let Ok(user_profile) = std::env::var("USERPROFILE") {
         let downloads = PathBuf::from(user_profile).join("Downloads");
@@ -217,7 +347,11 @@ fn dirs_fallback() -> PathBuf {
 }
 
 // Background Local RPC Server to communicate with the browser extension
-fn start_local_rpc_server(app_handle: AppHandle, downloads_map: Arc<Mutex<HashMap<String, DownloadItem>>>) {
+fn start_local_rpc_server(
+    app_handle: AppHandle,
+    downloads_map: Arc<Mutex<HashMap<String, DownloadItem>>>,
+    settings_ref: Arc<Mutex<AppSettings>>,
+) {
     tauri::async_runtime::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
@@ -230,6 +364,7 @@ fn start_local_rpc_server(app_handle: AppHandle, downloads_map: Arc<Mutex<HashMa
         while let Ok((mut socket, _)) = listener.accept().await {
             let app = app_handle.clone();
             let dl_map = downloads_map.clone();
+            let cfg_ref = settings_ref.clone();
 
             tauri::async_runtime::spawn(async move {
                 let mut buffer = [0u8; 8192];
@@ -291,8 +426,8 @@ Connection: close\r\n\r\n{}",
                     let mut download_cookies = None;
                     let mut download_referer = None;
                     let mut download_ua = None;
+                    let mut download_parts = None;
 
-                    // Parse JSON body if present
                     #[derive(Deserialize)]
                     struct RpcDownloadPayload {
                         url: String,
@@ -300,7 +435,6 @@ Connection: close\r\n\r\n{}",
                         cookies: Option<String>,
                         referer: Option<String>,
                         user_agent: Option<String>,
-                        #[allow(dead_code)]
                         parts: Option<usize>,
                     }
 
@@ -310,8 +444,8 @@ Connection: close\r\n\r\n{}",
                         download_cookies = payload.cookies;
                         download_referer = payload.referer;
                         download_ua = payload.user_agent;
+                        download_parts = payload.parts;
                     } else if let Some(query_start) = first_line.find('?') {
-                        // Fallback: parse query parameters /download?url=...&name=...
                         let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
                         for param in query.split('&') {
                             if let Some((k, v)) = param.split_once('=') {
@@ -325,16 +459,25 @@ Connection: close\r\n\r\n{}",
                     }
 
                     if let Some(url) = download_url {
+                        let cfg = {
+                            let s = cfg_ref.lock().await;
+                            s.clone()
+                        };
+
+                        let parts_to_use = download_parts.unwrap_or(cfg.max_connections);
+                        let ua_to_use = download_ua.or(Some(cfg.user_agent));
+
                         let _ = start_download_internal(
                             app,
                             dl_map,
                             url,
                             download_name,
-                            None,
-                            Some(8),
+                            Some(cfg.download_dir),
+                            Some(parts_to_use),
                             download_cookies,
                             download_referer,
-                            download_ua,
+                            ua_to_use,
+                            cfg.open_folder_on_finish,
                         ).await;
 
                         let resp = send_response("{\"success\":true}");
@@ -373,7 +516,6 @@ fn register_pew_protocol() {
 }
 
 fn main() {
-    // If an instance is already running, request it to show its window and exit
     if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:41738") {
         use std::io::Write;
         let _ = stream.write_all(b"GET /show HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
@@ -383,20 +525,31 @@ fn main() {
 
     register_pew_protocol();
 
-    let app_state = AppState::default();
+    let initial_settings = load_saved_settings();
+    let app_state = AppState {
+        downloads: Arc::new(Mutex::new(HashMap::new())),
+        settings: Arc::new(Mutex::new(initial_settings)),
+    };
+
     let downloads_ref = app_state.downloads.clone();
+    let settings_ref = app_state.settings.clone();
 
     tauri::Builder::default()
         .manage(app_state)
         .setup(move |app| {
-            start_local_rpc_server(app.handle().clone(), downloads_ref);
+            start_local_rpc_server(app.handle().clone(), downloads_ref, settings_ref);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             probe_url,
             start_download,
             get_downloads,
-            open_in_folder
+            open_in_folder,
+            open_file,
+            delete_download,
+            get_settings,
+            save_settings,
+            select_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -41,6 +41,11 @@
         <button class="nav-item" data-filter="compressed"><span class="icon">🗜️</span> Compressed</button>
         <button class="nav-item" data-filter="document"><span class="icon">📄</span> Documents</button>
         <button class="nav-item" data-filter="software"><span class="icon">💻</span> Programs</button>
+
+        <div class="nav-section-title">PREFERENCES</div>
+        <button class="nav-item" id="nav-settings-btn" data-view="settings">
+          <span class="icon">⚙️</span> Settings
+        </button>
       </nav>
 
       <div class="sidebar-footer">
@@ -59,24 +64,26 @@
           <button class="btn btn-primary" id="btn-add-modal">
             <span class="btn-icon">+</span> Add Download
           </button>
-          <button class="btn btn-secondary" id="btn-resume-all" title="Resume All">▶ Resume</button>
-          <button class="btn btn-secondary" id="btn-pause-all" title="Pause All">⏸ Pause</button>
+          <button class="btn btn-secondary" id="btn-view-downloads" style="display: none;">
+            📋 Downloads List
+          </button>
+          <button class="btn btn-secondary" id="btn-open-dl-dir" title="Open Download Folder">📂 Open Folder</button>
         </div>
 
-        <div class="search-box">
+        <div class="search-box" id="top-search-box">
           <span class="search-icon">🔍</span>
           <input type="text" id="search-input" placeholder="Search downloads...">
         </div>
       </header>
 
       <!-- Downloads Table Container -->
-      <div class="table-container">
+      <div class="table-container" id="downloads-view">
         <table class="downloads-table">
           <thead>
             <tr>
-              <th style="width: 32%;">File Name</th>
+              <th style="width: 34%;">File Name</th>
               <th style="width: 12%;">Size</th>
-              <th style="width: 26%;">Progress</th>
+              <th style="width: 24%;">Progress</th>
               <th style="width: 12%;">Speed</th>
               <th style="width: 10%;">Status</th>
               <th style="width: 8%; text-align: right;">Action</th>
@@ -91,7 +98,64 @@
         <div class="empty-state" id="empty-state">
           <div class="empty-icon">⚡</div>
           <h3>No downloads yet</h3>
-          <p>Click "Add Download" above or copy a download link to get started.</p>
+          <p>Click "+ Add Download" above, or use the browser extension to grab video streams instantly.</p>
+        </div>
+      </div>
+
+      <!-- Settings Panel Container -->
+      <div class="settings-container" id="settings-view" style="display: none;">
+        <div class="settings-header">
+          <h2>⚙️ Settings & Storage Preferences</h2>
+          <p>Configure default download locations, multi-part acceleration threads, and browser integration.</p>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-section">
+            <label class="settings-label">Default Download Directory</label>
+            <p class="settings-desc">All downloaded files and video streams will be saved to this folder automatically.</p>
+            <div class="input-with-btn">
+              <input type="text" id="setting-download-dir" class="settings-input" spellcheck="false" placeholder="C:\Users\...\Downloads">
+              <button class="btn btn-primary" id="btn-browse-dir">📂 Browse...</button>
+              <button class="btn btn-secondary" id="btn-open-current-dir" title="Open in File Explorer">↗ Open Folder</button>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="slider-header">
+              <label class="settings-label">Max Connections / Segments Per Task: <strong id="setting-threads-val">8</strong></label>
+            </div>
+            <p class="settings-desc">Accelerates download speeds by requesting multiple byte ranges concurrently (Recommended: 8 - 16).</p>
+            <input type="range" id="setting-max-connections" min="1" max="32" value="8" class="range-slider">
+          </div>
+
+          <div class="settings-section">
+            <label class="settings-label">Automation & Integration</label>
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="setting-auto-start" checked>
+                <span>⚡ Auto-start downloads immediately when intercepted from browser extension</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="setting-open-folder">
+                <span>📂 Automatically open folder in Windows Explorer when download finishes</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <label class="settings-label">Network User-Agent</label>
+            <p class="settings-desc">User-Agent header sent to remote servers (helps bypass blocks and restricted video CDNs).</p>
+            <select id="setting-ua" class="settings-select">
+              <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36">Google Chrome (Default Windows 64-bit)</option>
+              <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0">Mozilla Firefox</option>
+              <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0">Microsoft Edge</option>
+            </select>
+          </div>
+
+          <div class="settings-actions">
+            <button class="btn btn-primary btn-save" id="btn-save-settings">💾 Save Preferences</button>
+            <span class="save-status-msg" id="save-status-msg" style="display: none;">✓ Settings saved successfully!</span>
+          </div>
         </div>
       </div>
 
@@ -102,6 +166,8 @@
           <span id="active-tasks-label">Engine Ready</span>
         </div>
         <div class="status-right">
+          <span id="save-path-indicator">📁 Downloads</span>
+          <span>•</span>
           <span>Pew v0.1.0 • Rust Core</span>
         </div>
       </footer>
@@ -120,18 +186,18 @@
         <div class="form-group">
           <label>URL</label>
           <div class="input-with-btn">
-            <input type="text" id="modal-url" placeholder="Paste direct download URL (https://...)" autofocus>
+            <input type="text" id="modal-url" placeholder="Paste download URL or YouTube link (https://...)" autofocus spellcheck="false">
             <button class="btn btn-secondary" id="btn-paste-clipboard">Paste</button>
           </div>
         </div>
 
         <div class="probe-loading" id="probe-loading" style="display: none;">
-          <span class="spinner"></span> Probing server details...
+          <span class="spinner"></span> Probing stream & server headers...
         </div>
 
         <div class="probe-info" id="probe-info" style="display: none;">
           <div class="info-row">
-            <span class="label">Detected File:</span>
+            <span class="label">File Name:</span>
             <input type="text" id="modal-filename" class="inline-input">
           </div>
           <div class="info-row">
