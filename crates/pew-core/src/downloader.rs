@@ -18,6 +18,8 @@ pub struct DownloadConfig {
     pub parts: usize,
     pub user_agent: String,
     pub timeout_secs: u64,
+    pub cookies: Option<String>,
+    pub referer: Option<String>,
 }
 
 impl Default for DownloadConfig {
@@ -26,6 +28,8 @@ impl Default for DownloadConfig {
             parts: 8,
             user_agent: CHROME_USER_AGENT.to_string(),
             timeout_secs: 30,
+            cookies: None,
+            referer: None,
         }
     }
 }
@@ -169,12 +173,13 @@ impl Downloader {
 
         for chunk in chunks {
             let client = self.client.clone();
+            let config = self.config.clone();
             let url = url.to_string();
             let path = target_path.to_path_buf();
             let downloaded_counter = downloaded_counter.clone();
 
             let handle = tokio::spawn(async move {
-                Self::download_chunk(client, url, path, chunk, downloaded_counter).await
+                Self::download_chunk(client, config, url, path, chunk, downloaded_counter).await
             });
 
             join_handles.push(handle);
@@ -201,6 +206,7 @@ impl Downloader {
 
     async fn download_chunk(
         client: Client,
+        config: DownloadConfig,
         url: String,
         target_path: PathBuf,
         chunk: Chunk,
@@ -208,7 +214,7 @@ impl Downloader {
     ) -> Result<()> {
         let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
         let req = client.get(&url).header("Range", range_header);
-        let req = apply_media_headers(req, &url);
+        let req = apply_media_headers(req, &url, config.cookies.as_deref(), config.referer.as_deref());
         let resp = req.send().await?;
 
         if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
@@ -242,7 +248,7 @@ impl Downloader {
         event_sender: &Option<mpsc::UnboundedSender<DownloadEvent>>,
     ) -> Result<()> {
         let req = self.client.get(url);
-        let req = apply_media_headers(req, url);
+        let req = apply_media_headers(req, url, self.config.cookies.as_deref(), self.config.referer.as_deref());
         let resp = req.send().await?;
         if !resp.status().is_success() {
             return Err(PewError::HttpStatus(resp.status()));
@@ -285,15 +291,30 @@ impl Downloader {
     }
 }
 
-pub fn apply_media_headers(builder: reqwest::RequestBuilder, url: &str) -> reqwest::RequestBuilder {
+pub fn apply_media_headers(
+    builder: reqwest::RequestBuilder,
+    url: &str,
+    cookies: Option<&str>,
+    referer: Option<&str>,
+) -> reqwest::RequestBuilder {
     let mut b = builder
         .header("User-Agent", CHROME_USER_AGENT)
         .header("Accept", "*/*")
         .header("Accept-Language", "en-US,en;q=0.9");
 
-    if url.contains("googlevideo.com") || url.contains("youtube.com") {
+    if let Some(ref_str) = referer {
+        if !ref_str.is_empty() {
+            b = b.header("Referer", ref_str);
+        }
+    } else if url.contains("googlevideo.com") || url.contains("youtube.com") {
         b = b.header("Referer", "https://www.youtube.com/")
              .header("Origin", "https://www.youtube.com");
+    }
+
+    if let Some(cookie_str) = cookies {
+        if !cookie_str.is_empty() {
+            b = b.header("Cookie", cookie_str);
+        }
     }
 
     b

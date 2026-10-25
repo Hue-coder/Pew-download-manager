@@ -62,7 +62,7 @@ async fn start_download(
     output_dir: Option<String>,
     parts: Option<usize>,
 ) -> Result<String, String> {
-    start_download_internal(app, state.downloads.clone(), url, filename, output_dir, parts).await
+    start_download_internal(app, state.downloads.clone(), url, filename, output_dir, parts, None, None, None).await
 }
 
 async fn start_download_internal(
@@ -72,6 +72,9 @@ async fn start_download_internal(
     filename: Option<String>,
     output_dir: Option<String>,
     parts: Option<usize>,
+    cookies: Option<String>,
+    referer: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<String, String> {
     let id = format!("dl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     let parts = parts.unwrap_or(8).clamp(1, 32);
@@ -79,7 +82,6 @@ async fn start_download_internal(
     let default_dir = dirs_fallback();
     let out_dir = output_dir.map(PathBuf::from).unwrap_or(default_dir);
 
-    // Initial item
     let initial_name = filename.clone().unwrap_or_else(|| {
         url.split('?').next().and_then(|u| u.split('/').last()).unwrap_or("download").to_string()
     });
@@ -110,6 +112,9 @@ async fn start_download_internal(
     tauri::async_runtime::spawn(async move {
         let config = DownloadConfig {
             parts,
+            cookies,
+            referer,
+            user_agent: user_agent.unwrap_or_else(|| pew_core::downloader::CHROME_USER_AGENT.to_string()),
             ..Default::default()
         };
 
@@ -283,12 +288,18 @@ Connection: close\r\n\r\n{}",
 
                     let mut download_url = None;
                     let mut download_name = None;
+                    let mut download_cookies = None;
+                    let mut download_referer = None;
+                    let mut download_ua = None;
 
                     // Parse JSON body if present
                     #[derive(Deserialize)]
                     struct RpcDownloadPayload {
                         url: String,
                         filename: Option<String>,
+                        cookies: Option<String>,
+                        referer: Option<String>,
+                        user_agent: Option<String>,
                         #[allow(dead_code)]
                         parts: Option<usize>,
                     }
@@ -296,6 +307,9 @@ Connection: close\r\n\r\n{}",
                     if let Ok(payload) = serde_json::from_str::<RpcDownloadPayload>(body_part.trim()) {
                         download_url = Some(payload.url);
                         download_name = payload.filename;
+                        download_cookies = payload.cookies;
+                        download_referer = payload.referer;
+                        download_ua = payload.user_agent;
                     } else if let Some(query_start) = first_line.find('?') {
                         // Fallback: parse query parameters /download?url=...&name=...
                         let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
@@ -318,6 +332,9 @@ Connection: close\r\n\r\n{}",
                             download_name,
                             None,
                             Some(8),
+                            download_cookies,
+                            download_referer,
+                            download_ua,
                         ).await;
 
                         let resp = send_response("{\"success\":true}");

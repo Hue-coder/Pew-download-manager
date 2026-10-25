@@ -48,21 +48,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       const quality = item.quality || 'Video';
       const format = item.format || 'MP4';
       const filename = getFilename(item.url, tab.title, quality, format);
-      const sizeText = item.size > 0 ? formatBytes(item.size) : 'Stream';
+      const isCombined = item.mediaType === 'combined';
 
       card.innerHTML = `
         <div class="media-title" title="${filename}">${filename}</div>
         <div class="media-meta">
           <div class="tag-group">
-            <span class="tag-quality">${quality}</span>
+            <span class="tag-quality" style="${isCombined ? 'background: #10b981; color: #fff;' : ''}">${quality}</span>
             <span class="tag-format">${format}</span>
           </div>
-          <span class="size">${sizeText}</span>
         </div>
         <div class="save-to">📁 Downloads\\${filename}</div>
         <div class="action-group">
-          <button class="btn-dl" title="Send to Pew Desktop App">⚡ Download with Pew</button>
-          <button class="btn-copy" title="Copy Stream URL">Copy</button>
+          <button class="btn-dl" title="Download via Pew">⚡ Download with Pew</button>
+          <button class="btn-copy" title="Copy Link">Copy</button>
         </div>
       `;
 
@@ -93,25 +92,12 @@ function getFilename(url, pageTitle, quality, format) {
   let title = (pageTitle || '').replace(/[\\/:*?"<>|]/g, '_').replace(/ - YouTube$/, '').trim();
   title = title.substring(0, 45);
 
-  const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') ? 'm4a' : 'mp4';
+  const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') || format.toLowerCase().includes('opus') ? 'm4a' : 'mp4';
+  const tag = quality.split(' ')[0].replace(/[^a-zA-Z0-9]/g, '');
 
   if (title) {
-    return `${title}_${quality}.${ext}`;
+    return `${title}_${tag}.${ext}`;
   }
 
-  const cleanUrl = url.split('?')[0].split('#')[0];
-  const name = cleanUrl.split('/').pop();
-  if (name && name.includes('.')) {
-    return name;
-  }
-
-  return `video_${quality}.${ext}`;
-}
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  return `video_${tag}.${ext}`;
 }

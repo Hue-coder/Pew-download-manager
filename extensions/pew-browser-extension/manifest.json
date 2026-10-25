@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Pew Video & Media Grabber",
-  "version": "1.0.0",
-  "description": "High-speed video sniffer and media download catcher for Pew Download Manager",
+  "name": "Pew Download Manager Integration",
+  "version": "1.1.0",
+  "description": "XDM-style automatic download catcher and media stream grabber for Pew",
   "permissions": [
     "webRequest",
     "storage",
     "activeTab",
-    "downloads"
+    "downloads",
+    "cookies"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -25,7 +26,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Pew Media Downloader",
+    "default_title": "Pew Download Manager",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

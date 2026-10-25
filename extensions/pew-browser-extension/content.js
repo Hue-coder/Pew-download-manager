@@ -1,44 +1,15 @@
-// Pew Media Grabber - In-page Floating Downloader (Content Script)
+// Pew In-Page Floating Downloader (Content Script)
 (function() {
   let mediaList = [];
   let panelContainer = null;
   let dropdownMenu = null;
 
-  // Listen for media detected from background service worker
   chrome.runtime.onMessage.addListener((message) => {
     if (message.action === 'PEW_MEDIA_FOUND') {
       mediaList = message.allMedia || [];
       renderOrUpdateFloatingPanel();
     }
   });
-
-  // Query DOM video tags directly to extract active video resolution
-  setInterval(() => {
-    const video = document.querySelector('video');
-    if (video && video.src && !video.src.startsWith('blob:')) {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-      let res = 'Video';
-      if (h >= 1080) res = '1080p';
-      else if (h >= 720) res = '720p';
-      else if (h >= 480) res = '480p';
-      else if (h >= 360) res = '360p';
-
-      const existing = mediaList.find(m => m.url === video.src);
-      if (!existing) {
-        mediaList.unshift({
-          id: 'dom_video_' + Date.now(),
-          url: video.src,
-          format: 'MP4',
-          quality: res,
-          mediaType: 'video',
-          size: 0,
-          timestamp: Date.now()
-        });
-        renderOrUpdateFloatingPanel();
-      }
-    }
-  }, 3000);
 
   function renderOrUpdateFloatingPanel() {
     if (mediaList.length === 0) return;
@@ -64,7 +35,7 @@
       </div>
       <div class="pew-dropdown" style="display: none;">
         <div class="pew-dropdown-header">
-          <span>⚡ Available Streams (${mediaList.length})</span>
+          <span>⚡ Detected Media Streams (${mediaList.length})</span>
           <button class="pew-open-app-btn" title="Open Desktop App">🖥️ Open App</button>
           <button class="pew-close-btn">&times;</button>
         </div>
@@ -116,25 +87,23 @@
       const quality = item.quality || 'Video';
       const format = item.format || 'MP4';
       const cleanName = getSuggestedFilename(item.url, quality, format);
-      const sizeStr = item.size > 0 ? formatBytes(item.size) : 'Full Stream';
+      const isCombined = item.mediaType === 'combined';
 
       itemEl.innerHTML = `
         <div class="pew-item-info">
           <div class="pew-item-title" title="${cleanName}">${cleanName}</div>
           <div class="pew-item-meta">
-            <span class="pew-format-tag">${quality}</span>
+            <span class="pew-format-tag ${isCombined ? 'tag-combined' : ''}">${quality}</span>
             <span class="pew-format-sub">${format}</span>
-            <span class="pew-size-tag">${sizeStr}</span>
           </div>
           <div class="pew-save-location">📁 Downloads\\${cleanName}</div>
         </div>
         <div class="pew-item-actions">
-          <button class="pew-action-download" title="Send to Pew Desktop App">⚡ Download</button>
-          <button class="pew-action-copy" title="Copy Link">📋</button>
+          <button class="pew-action-download" title="Send to Pew App">⚡ Download</button>
+          <button class="pew-action-copy" title="Copy Stream URL">📋</button>
         </div>
       `;
 
-      // Download action
       itemEl.querySelector('.pew-action-download').addEventListener('click', () => {
         chrome.runtime.sendMessage({
           action: 'TRIGGER_PEW_DOWNLOAD',
@@ -143,11 +112,10 @@
         });
 
         const dlBtn = itemEl.querySelector('.pew-action-download');
-        dlBtn.textContent = '✓ Sent to Pew!';
+        dlBtn.textContent = '✓ Sent!';
         setTimeout(() => dlBtn.textContent = '⚡ Download', 2000);
       });
 
-      // Copy action
       itemEl.querySelector('.pew-action-copy').addEventListener('click', () => {
         navigator.clipboard.writeText(item.url);
         const copyBtn = itemEl.querySelector('.pew-action-copy');
@@ -163,27 +131,14 @@
     let title = document.title ? document.title.replace(/[\\/:*?"<>|]/g, '_').replace(/ - YouTube$/, '').trim() : '';
     title = title.substring(0, 45);
 
-    const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') ? 'm4a' : 'mp4';
+    const ext = format.toLowerCase().includes('audio') || format.toLowerCase().includes('m4a') || format.toLowerCase().includes('opus') ? 'm4a' : 'mp4';
+    const tag = quality.split(' ')[0].replace(/[^a-zA-Z0-9]/g, '');
 
     if (title) {
-      return `${title}_${quality}.${ext}`;
+      return `${title}_${tag}.${ext}`;
     }
 
-    const cleanUrl = url.split('?')[0].split('#')[0];
-    const rawName = cleanUrl.split('/').pop();
-    if (rawName && rawName.includes('.')) {
-      return rawName;
-    }
-
-    return `video_${quality}.${ext}`;
-  }
-
-  function formatBytes(bytes) {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return `video_${tag}.${ext}`;
   }
 
   function makeDraggable(container, handle) {
