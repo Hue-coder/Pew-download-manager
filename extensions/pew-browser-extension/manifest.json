@@ -7,8 +7,7 @@
     "webRequest",
     "storage",
     "activeTab",
-    "downloads",
-    "cookies"
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"

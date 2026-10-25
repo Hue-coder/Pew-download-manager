@@ -1,38 +1,27 @@
-// Pew Integration Background Service Worker (XDM Architecture)
+// Pew Integration Background Service Worker (Rock-solid Sniffer)
 const detectedMedia = new Map(); // tabId -> Array of media streams
-let interceptDownloads = true;
 
-// 1. AUTOMATIC DOWNLOAD INTERCEPTION (Like XDM / IDM)
+// 1. AUTOMATIC DOWNLOAD INTERCEPTION
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
-  if (!interceptDownloads) return;
-
   const url = downloadItem.finalUrl || downloadItem.url;
-  // Ignore data URIs or internal browser extensions
   if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('chrome:')) {
     return;
   }
 
-  // Check if Pew Desktop App is active
   try {
-    const healthCheck = await fetch('http://127.0.0.1:41738/health').then(r => r.json());
-    if (healthCheck && healthCheck.status === 'running') {
-      // Cancel the slow built-in browser download
+    const health = await fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(1000) }).then(r => r.json());
+    if (health && health.status === 'running') {
       chrome.downloads.cancel(downloadItem.id).catch(() => {});
       chrome.downloads.erase({ id: downloadItem.id }).catch(() => {});
 
-      // Collect session cookies for authenticated sites (Mega, Drive, etc.)
-      const cookies = await getCookiesForUrl(url);
-
       const filename = downloadItem.filename ? downloadItem.filename.split(/[\\/]/).pop() : undefined;
 
-      // Pass directly to Pew Desktop App
       await fetch('http://127.0.0.1:41738/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: url,
           filename: filename,
-          cookies: cookies,
           referer: downloadItem.referrer || '',
           user_agent: navigator.userAgent,
           parts: 8
@@ -40,30 +29,30 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       });
     }
   } catch (e) {
-    // Pew desktop app is not open, let the browser download normally
+    // Pew desktop app is offline, let browser handle download
   }
 });
 
-async function getCookiesForUrl(url) {
-  try {
-    const cookieList = await chrome.cookies.getAll({ url });
-    return cookieList.map(c => `${c.name}=${c.value}`).join('; ');
-  } catch (e) {
-    return '';
-  }
-}
-
-// 2. VIDEO STREAM SNIFFER (YouTube, HLS, DASH, MP4)
+// YouTube ITAG resolution map
 const YT_ITAG_MAP = {
-  '22':  { res: '720p HD (Video + Audio)', format: 'MP4', type: 'combined', priority: 1 },
-  '18':  { res: '360p SD (Video + Audio)', format: 'MP4', type: 'combined', priority: 2 },
-  '137': { res: '1080p Full HD (Video Only)', format: 'MP4', type: 'video', priority: 3 },
-  '248': { res: '1080p (WebM Video)', format: 'WebM', type: 'video', priority: 4 },
-  '136': { res: '720p (MP4 Video)', format: 'MP4', type: 'video', priority: 5 },
-  '140': { res: 'Original Audio (128k M4A)', format: 'M4A', type: 'audio', priority: 6 },
-  '251': { res: 'Original Audio (160k Opus)', format: 'Opus', type: 'audio', priority: 7 }
+  '22':  '720p HD (Video + Audio)',
+  '18':  '360p (Video + Audio)',
+  '137': '1080p Full HD',
+  '248': '1080p (WebM)',
+  '399': '1080p (AV1)',
+  '136': '720p HD',
+  '247': '720p (WebM)',
+  '398': '720p (AV1)',
+  '135': '480p',
+  '244': '480p (WebM)',
+  '397': '480p (AV1)',
+  '134': '360p',
+  '243': '360p (WebM)',
+  '140': 'Audio (128k M4A)',
+  '251': 'Audio (160k Opus)'
 };
 
+// 2. NETWORK TRAFFIC SNIFFER
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (!details.tabId || details.tabId < 0) return;
@@ -76,53 +65,37 @@ chrome.webRequest.onHeadersReceived.addListener(
 
     for (const h of headers) {
       const name = h.name.toLowerCase();
-      if (name === 'content-type') contentType = h.value || '';
+      if (name === 'content-type') contentType = (h.value || '').toLowerCase();
       else if (name === 'content-length') contentLength = parseInt(h.value || '0', 10);
     }
 
-    // A. Detect HLS (.m3u8) Playlists (Used on 90% of streaming video sites)
-    if (url.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/x-mpegurl')) {
-      const item = {
-        id: 'hls_' + generateHash(url),
-        url: url,
-        format: 'HLS Stream',
-        quality: 'Original Quality',
-        mediaType: 'hls',
-        size: 0,
-        isStream: true,
-        timestamp: Date.now()
-      };
-      addMediaForTab(details.tabId, item);
-      return;
-    }
-
-    // B. Detect YouTube Streams (googlevideo.com)
+    // A. Detect YouTube googlevideo streams
     if (url.includes('googlevideo.com/videoplayback')) {
       const itagMatch = url.match(/[?&]itag=(\d+)/);
-      const itag = itagMatch ? itagMatch[1] : null;
+      const itag = itagMatch ? itagMatch[1] : '';
 
-      if (!itag || !YT_ITAG_MAP[itag]) return;
+      const isAudio = itag === '140' || itag === '251' || contentType.includes('audio');
+      const isCombined = itag === '22' || itag === '18';
 
-      const info = YT_ITAG_MAP[itag];
+      let quality = YT_ITAG_MAP[itag] || (isAudio ? 'Audio Stream' : (isCombined ? '720p (With Audio)' : 'Video Stream'));
+      let format = isAudio ? 'M4A' : 'MP4';
 
-      // Strip chunk range parameters so Pew downloads the complete master stream
-      const fullMediaUrl = url.replace(/([?&])range=\d+-\d+(&|$)/g, '$1')
-                              .replace(/([?&])rn=\d+(&|$)/g, '$1')
-                              .replace(/([?&])alr=yes(&|$)/g, '$1')
-                              .replace(/&&+/g, '&')
-                              .replace(/\?&/, '?')
-                              .replace(/[?&]$/, '');
+      // Clean stream url
+      const fullUrl = url.replace(/([?&])range=\d+-\d+(&|$)/g, '$1')
+                         .replace(/([?&])rn=\d+(&|$)/g, '$1')
+                         .replace(/([?&])alr=yes(&|$)/g, '$1')
+                         .replace(/&&+/g, '&')
+                         .replace(/\?&/, '?')
+                         .replace(/[?&]$/, '');
 
       const item = {
-        id: `yt_${itag}_${details.tabId}`,
-        url: fullMediaUrl,
-        contentType: contentType,
+        id: `yt_${itag || 'stream'}_${details.tabId}`,
+        url: fullUrl,
+        format: format,
+        quality: quality,
+        mediaType: isCombined ? 'combined' : (isAudio ? 'audio' : 'video'),
         size: contentLength,
-        format: info.format,
-        quality: info.res,
-        mediaType: info.type,
-        priority: info.priority,
-        isStream: true,
+        priority: isCombined ? 1 : (isAudio ? 5 : 2),
         timestamp: Date.now()
       };
 
@@ -130,20 +103,59 @@ chrome.webRequest.onHeadersReceived.addListener(
       return;
     }
 
-    // C. Detect Direct Video Files (.mp4, .mkv, .webm, etc.)
-    const cleanUrl = url.split('?')[0].toLowerCase();
-    if (cleanUrl.endsWith('.mp4') || cleanUrl.endsWith('.mkv') || cleanUrl.endsWith('.webm') || cleanUrl.endsWith('.mov')) {
-      const ext = cleanUrl.split('.').pop().toUpperCase();
+    // B. Detect HLS (.m3u8) Streams
+    if (url.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/x-mpegurl')) {
       const item = {
-        id: 'direct_' + generateHash(url),
+        id: 'hls_' + hashStr(url),
         url: url,
-        contentType: contentType,
+        format: 'HLS Stream',
+        quality: 'Original Stream',
+        mediaType: 'combined',
+        size: 0,
+        priority: 1,
+        timestamp: Date.now()
+      };
+      addMediaForTab(details.tabId, item);
+      return;
+    }
+
+    // C. Detect Video MIME types or Extensions
+    const cleanUrl = url.split('?')[0].toLowerCase();
+    const hasVideoExt = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv'].some(e => cleanUrl.endsWith(e));
+    const isVideoMime = contentType.startsWith('video/') || contentType.includes('video/mp4') || contentType.includes('video/webm');
+
+    if (hasVideoExt || isVideoMime) {
+      // Ignore tiny icons/previews
+      if (contentLength > 0 && contentLength < 150 * 1024) return;
+
+      const ext = cleanUrl.includes('.') ? cleanUrl.split('.').pop().toUpperCase() : 'MP4';
+      const item = {
+        id: 'video_' + hashStr(url),
+        url: url,
+        format: ext.length <= 4 ? ext : 'MP4',
+        quality: 'Video (Direct)',
+        mediaType: 'combined',
         size: contentLength,
-        format: ext,
-        quality: 'Direct Video',
-        mediaType: 'video',
-        priority: 10,
-        isStream: false,
+        priority: 1,
+        timestamp: Date.now()
+      };
+      addMediaForTab(details.tabId, item);
+      return;
+    }
+
+    // D. Detect Audio
+    const hasAudioExt = ['.mp3', '.m4a', '.aac', '.flac', '.wav', '.ogg'].some(e => cleanUrl.endsWith(e));
+    if (hasAudioExt || contentType.startsWith('audio/')) {
+      if (contentLength > 0 && contentLength < 100 * 1024) return;
+      const ext = cleanUrl.includes('.') ? cleanUrl.split('.').pop().toUpperCase() : 'AUDIO';
+      const item = {
+        id: 'audio_' + hashStr(url),
+        url: url,
+        format: ext.length <= 4 ? ext : 'AUDIO',
+        quality: 'Audio Track',
+        mediaType: 'audio',
+        size: contentLength,
+        priority: 6,
         timestamp: Date.now()
       };
       addMediaForTab(details.tabId, item);
@@ -156,16 +168,14 @@ chrome.webRequest.onHeadersReceived.addListener(
 function addMediaForTab(tabId, item) {
   let list = detectedMedia.get(tabId) || [];
 
-  const existingIdx = list.findIndex(m => m.id === item.id || (m.quality === item.quality && m.format === item.format));
-  if (existingIdx >= 0) {
-    list[existingIdx] = item;
+  const idx = list.findIndex(m => m.id === item.id || (m.quality === item.quality && m.format === item.format));
+  if (idx >= 0) {
+    list[idx] = item;
   } else {
     list.push(item);
   }
 
-  // Sort by priority (combined playable videos first)
   list.sort((a, b) => (a.priority || 99) - (b.priority || 99));
-
   detectedMedia.set(tabId, list);
 
   chrome.action.setBadgeText({ tabId, text: String(list.length) });
@@ -176,6 +186,15 @@ function addMediaForTab(tabId, item) {
     mediaCount: list.length,
     allMedia: list
   }).catch(() => {});
+}
+
+function hashStr(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h);
 }
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -198,6 +217,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'MEDIA_FROM_DOM') {
+    if (sender.tab && sender.tab.id && message.item) {
+      addMediaForTab(sender.tab.id, message.item);
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.action === 'SHOW_PEW_APP') {
     fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {});
     sendResponse({ success: true });
@@ -205,7 +232,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'CHECK_PEW_STATUS') {
-    fetch('http://127.0.0.1:41738/health')
+    fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(1000) })
       .then(r => r.json())
       .then(() => sendResponse({ connected: true }))
       .catch(() => sendResponse({ connected: false }));
@@ -213,30 +240,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'TRIGGER_PEW_DOWNLOAD') {
-    (async () => {
-      const { url, filename } = message;
-      const cookies = await getCookiesForUrl(url);
+    const { url, filename } = message;
 
-      fetch('http://127.0.0.1:41738/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: url,
-          filename: filename,
-          cookies: cookies,
-          referer: url.includes('googlevideo.com') ? 'https://www.youtube.com/' : '',
-          user_agent: navigator.userAgent,
-          parts: 8
-        })
+    fetch('http://127.0.0.1:41738/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: url,
+        filename: filename,
+        referer: url.includes('googlevideo.com') ? 'https://www.youtube.com/' : '',
+        user_agent: navigator.userAgent,
+        parts: 8
       })
-      .then(r => r.json())
-      .then(() => sendResponse({ success: true }))
-      .catch((err) => {
-        // Fallback: browser download
-        chrome.downloads.download({ url, filename, saveAs: true });
-        sendResponse({ success: false });
-      });
-    })();
+    })
+    .then(r => r.json())
+    .then(() => sendResponse({ success: true }))
+    .catch(() => {
+      chrome.downloads.download({ url, filename, saveAs: true });
+      sendResponse({ success: true });
+    });
+
     return true;
   }
 });

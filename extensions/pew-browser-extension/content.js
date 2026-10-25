@@ -1,15 +1,63 @@
-// Pew In-Page Floating Downloader (Content Script)
+// Pew In-Page Video Grabber (Content Script)
 (function() {
   let mediaList = [];
   let panelContainer = null;
   let dropdownMenu = null;
 
+  // 1. Initial query to background
+  chrome.runtime.sendMessage({ action: 'GET_TAB_MEDIA' }, (res) => {
+    if (res && res.media && res.media.length > 0) {
+      mediaList = res.media;
+      renderOrUpdateFloatingPanel();
+    }
+  });
+
+  // 2. Listen to updates from background
   chrome.runtime.onMessage.addListener((message) => {
     if (message.action === 'PEW_MEDIA_FOUND') {
       mediaList = message.allMedia || [];
       renderOrUpdateFloatingPanel();
     }
   });
+
+  // 3. Directly inspect HTML5 <video> elements on the page
+  function inspectVideos() {
+    const videos = document.querySelectorAll('video');
+    videos.forEach((video) => {
+      const src = video.currentSrc || video.src;
+      if (src && (src.startsWith('http://') || src.startsWith('https://'))) {
+        const height = video.videoHeight;
+        let quality = 'Video';
+        if (height >= 1080) quality = '1080p Full HD';
+        else if (height >= 720) quality = '720p HD';
+        else if (height >= 480) quality = '480p';
+        else if (height >= 360) quality = '360p';
+
+        const item = {
+          id: 'dom_' + hashStr(src),
+          url: src,
+          format: 'MP4',
+          quality: quality,
+          mediaType: 'combined',
+          size: 0,
+          priority: 1,
+          timestamp: Date.now()
+        };
+
+        chrome.runtime.sendMessage({ action: 'MEDIA_FROM_DOM', item }, () => {});
+      }
+    });
+  }
+
+  // Monitor video play events
+  document.addEventListener('play', (e) => {
+    if (e.target && e.target.tagName === 'VIDEO') {
+      setTimeout(inspectVideos, 500);
+    }
+  }, true);
+
+  // Periodic poll for dynamic players
+  setInterval(inspectVideos, 3000);
 
   function renderOrUpdateFloatingPanel() {
     if (mediaList.length === 0) return;
@@ -25,6 +73,11 @@
   }
 
   function createFloatingPanel() {
+    if (document.getElementById('pew-floating-widget')) {
+      panelContainer = document.getElementById('pew-floating-widget');
+      return;
+    }
+
     panelContainer = document.createElement('div');
     panelContainer.id = 'pew-floating-widget';
     panelContainer.innerHTML = `
@@ -35,7 +88,7 @@
       </div>
       <div class="pew-dropdown" style="display: none;">
         <div class="pew-dropdown-header">
-          <span>⚡ Detected Media Streams (${mediaList.length})</span>
+          <span>⚡ Detected Media (${mediaList.length})</span>
           <button class="pew-open-app-btn" title="Open Desktop App">🖥️ Open App</button>
           <button class="pew-close-btn">&times;</button>
         </div>
@@ -93,13 +146,13 @@
         <div class="pew-item-info">
           <div class="pew-item-title" title="${cleanName}">${cleanName}</div>
           <div class="pew-item-meta">
-            <span class="pew-format-tag ${isCombined ? 'tag-combined' : ''}">${quality}</span>
+            <span class="pew-format-tag" style="${isCombined ? 'background: #10b981; color: #fff;' : ''}">${quality}</span>
             <span class="pew-format-sub">${format}</span>
           </div>
           <div class="pew-save-location">📁 Downloads\\${cleanName}</div>
         </div>
         <div class="pew-item-actions">
-          <button class="pew-action-download" title="Send to Pew App">⚡ Download</button>
+          <button class="pew-action-download" title="Send to Pew Desktop App">⚡ Download</button>
           <button class="pew-action-copy" title="Copy Stream URL">📋</button>
         </div>
       `;
@@ -139,6 +192,15 @@
     }
 
     return `video_${tag}.${ext}`;
+  }
+
+  function hashStr(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) - h) + str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h);
   }
 
   function makeDraggable(container, handle) {
