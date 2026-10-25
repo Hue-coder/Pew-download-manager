@@ -149,7 +149,8 @@ impl HlsDownloader {
         }
 
         file.flush().await?;
-        is_running.store(false, Ordering::Relaxed);
+        is_running.store(false, Ordering::SeqCst);
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         let final_size = downloaded_counter.load(Ordering::Relaxed);
         if final_size == 0 {

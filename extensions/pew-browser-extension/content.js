@@ -276,6 +276,7 @@
           safeSendMessage({
             action: 'TRIGGER_PEW_DOWNLOAD',
             url: item.url,
+            audio_url: item.audio_url || undefined,
             filename: cleanName
           });
 

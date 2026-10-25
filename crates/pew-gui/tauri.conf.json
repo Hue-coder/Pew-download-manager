@@ -10,6 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Pew Download Manager",
         "width": 1080,
         "height": 700,

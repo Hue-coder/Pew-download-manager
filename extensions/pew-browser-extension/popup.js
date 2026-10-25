@@ -59,6 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentMedia = data.formats.map(f => ({
           id: f.id,
           url: f.url,
+          audio_url: f.audio_url || undefined,
           filename: f.filename,
           format: f.format,
           quality: f.quality,
@@ -149,6 +150,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: item.url,
+            audio_url: item.audio_url || undefined,
             filename: filename,
             referer: tabUrl,
             user_agent: navigator.userAgent,

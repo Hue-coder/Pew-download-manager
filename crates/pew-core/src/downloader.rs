@@ -242,8 +242,9 @@ impl Downloader {
             }
         }
 
-        is_running.store(false, Ordering::Relaxed);
+        is_running.store(false, Ordering::SeqCst);
         let _ = speed_tx.send(());
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         let final_downloaded = downloaded_counter.load(Ordering::Relaxed);
         if final_downloaded == 0 {

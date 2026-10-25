@@ -134,10 +134,12 @@ function setupEventListeners() {
     if (!url) return;
 
     let filename = modalFilenameInput.value.trim() || undefined;
+    let audioUrl = undefined;
     if (modalResolvedFormats && modalResolvedFormats.length > 0 && modalFormatSelect) {
       const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
       if (chosen && chosen.url) {
         url = chosen.url;
+        audioUrl = chosen.audio_url || undefined;
         filename = chosen.filename;
       }
     }
@@ -147,7 +149,8 @@ function setupEventListeners() {
     try {
       if (invoke) {
         await invoke('start_download', { 
-          url, 
+          url,
+          audioUrl,
           filename, 
           parts,
           outputDir: state.settings.download_dir || undefined 
@@ -159,6 +162,15 @@ function setupEventListeners() {
       alert('Failed to start download: ' + err);
     }
   });
+
+  const btnQuit = document.getElementById('btn-quit-app');
+  if (btnQuit) {
+    btnQuit.addEventListener('click', () => {
+      if (confirm('Are you sure you want to quit Pew Download Manager completely?')) {
+        if (invoke) invoke('exit_app');
+      }
+    });
+  }
 
   // Search
   document.getElementById('search-input').addEventListener('input', (e) => {
@@ -409,12 +421,13 @@ function matchesFilter(item) {
     return false;
   }
 
+  const isFinished = item.status === 'Completed' || (item.total_bytes > 0 && item.downloaded_bytes >= item.total_bytes && item.speed_bps === 0);
   const ext = item.filename.split('.').pop().toLowerCase();
   switch (state.activeFilter) {
     case 'downloading':
-      return item.status === 'Downloading' || item.status === 'Starting';
+      return !isFinished && (item.status === 'Downloading' || item.status === 'Starting' || item.status.includes('...'));
     case 'completed':
-      return item.status === 'Completed' && item.downloaded_bytes > 0;
+      return isFinished;
     case 'video':
       return ['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'm4v', 'flv'].includes(ext);
     case 'compressed':
@@ -457,12 +470,13 @@ function updateRow(item) {
 function getRowHtml(item) {
   const total = item.total_bytes || 0;
   const downloaded = item.downloaded_bytes || 0;
-  const pct = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : (item.status === 'Completed' ? 100 : 0);
+  const isFinished = item.status === 'Completed' || (total > 0 && downloaded >= total && item.speed_bps === 0);
+  const pct = isFinished ? 100 : (total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0);
   const icon = getFileIcon(item.filename);
 
   let statusClass = 'downloading';
   let statusText = item.status;
-  if (item.status === 'Completed') {
+  if (isFinished) {
     statusClass = 'completed';
     statusText = 'Completed';
   } else if (item.status === 'Error') {
@@ -503,14 +517,14 @@ function getRowHtml(item) {
       </div>
     </td>
     <td style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--accent-cyan);">
-      ${item.speed_bps > 0 ? formatSpeed(item.speed_bps) : '-'}
+      ${!isFinished && item.speed_bps > 0 ? formatSpeed(item.speed_bps) : '-'}
     </td>
     <td>
       <span class="status-badge ${statusClass}" title="${item.error || item.status}">${statusText}</span>
     </td>
     <td>
       <div class="action-btn-cell">
-        ${item.status === 'Completed' && item.target_path ? `
+        ${(isFinished || item.status === 'Completed') && item.target_path ? `
           <button class="icon-action-btn btn-play" title="Open / Play File">▶️</button>
           <button class="icon-action-btn btn-open" title="Open in File Explorer">📂</button>
         ` : ''}

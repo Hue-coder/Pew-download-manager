@@ -47,6 +47,7 @@ async function resolvePageMedia(url, tabId, pageTitle) {
       const items = data.formats.map((f, idx) => ({
         id: f.id || `fmt_${idx}_${Date.now()}`,
         url: f.url,
+        audio_url: f.audio_url || undefined,
         filename: f.filename,
         format: f.format,
         quality: f.quality,
@@ -234,12 +235,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'TRIGGER_PEW_DOWNLOAD') {
-    const { url, filename } = message;
+    const { url, filename, audio_url } = message;
     fetch('http://127.0.0.1:41738/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         url: url,
+        audio_url: audio_url || undefined,
         filename: filename,
         referer: sender.tab ? sender.tab.url : '',
         user_agent: navigator.userAgent,

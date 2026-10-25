@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -55,6 +55,7 @@ pub struct ResolvedFormat {
     pub quality: String,
     pub format: String,
     pub url: String,
+    pub audio_url: Option<String>,
     pub size: u64,
     pub media_type: String, // "video" or "audio"
     pub filename: String,
@@ -94,6 +95,109 @@ fn save_settings_to_file(settings: &AppSettings) {
     }
 }
 
+fn find_ffmpeg() -> Option<PathBuf> {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("PewDownloadManager").join("bin").join("ffmpeg.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join("ffmpeg.exe");
+            if p.exists() {
+                return Some(p);
+            }
+            let p_bin = parent.join("bin").join("ffmpeg.exe");
+            if p_bin.exists() {
+                return Some(p_bin);
+            }
+        }
+    }
+    if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+        let p = PathBuf::from(localappdata)
+            .join("Python")
+            .join("pythoncore-3.14-64")
+            .join("Lib")
+            .join("site-packages")
+            .join("static_ffmpeg")
+            .join("bin")
+            .join("win32")
+            .join("ffmpeg.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    Some(PathBuf::from("ffmpeg"))
+}
+
+async fn mux_video_audio(ffmpeg_exe: &Path, vid_path: &Path, aud_path: &Path, out_path: &Path) -> Result<(), String> {
+    let vid_str = vid_path.to_string_lossy().to_string();
+    let aud_str = aud_path.to_string_lossy().to_string();
+    let out_str = out_path.to_string_lossy().to_string();
+    let ffmpeg_str = ffmpeg_exe.to_string_lossy().to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let status = std::process::Command::new(ffmpeg_str)
+            .args([
+                "-y",
+                "-i", &vid_str,
+                "-i", &aud_str,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                &out_str,
+            ])
+            .output();
+
+        match status {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                Err(format!("FFmpeg mux error: {}", err))
+            }
+            Err(e) => Err(format!("Could not run FFmpeg: {}", e)),
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+
+async fn convert_audio(ffmpeg_exe: &Path, in_path: &Path, out_path: &Path, target_ext: &str) -> Result<(), String> {
+    let in_str = in_path.to_string_lossy().to_string();
+    let out_str = out_path.to_string_lossy().to_string();
+    let ffmpeg_str = ffmpeg_exe.to_string_lossy().to_string();
+    let ext = target_ext.to_lowercase();
+
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(ffmpeg_str);
+        cmd.args(["-y", "-i", &in_str, "-vn"]);
+        if ext == "mp3" {
+            cmd.args(["-c:a", "libmp3lame", "-q:a", "2"]);
+        } else if ext == "wav" {
+            cmd.args(["-c:a", "pcm_s16le"]);
+        } else {
+            cmd.args(["-c:a", "copy"]);
+        }
+        cmd.arg(&out_str);
+
+        match cmd.output() {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                Err(format!("FFmpeg audio conversion error: {}", err))
+            }
+            Err(e) => Err(format!("Could not run FFmpeg: {}", e)),
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
 async fn resolve_media_options(url: &str) -> MediaResolveResult {
     let url_owned = url.to_string();
     let result = tokio::task::spawn_blocking(move || {
@@ -119,7 +223,10 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                 if let Some(u) = f["url"].as_str() {
                                     audio_url = Some(u.to_string());
                                     audio_size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
-                                    break;
+                                    let ext = f["ext"].as_str().unwrap_or("");
+                                    if ext == "m4a" {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -140,13 +247,21 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                             480 => ("480p", "480p SD"),
                                             _ => ("360p", "360p"),
                                         };
-                                        let size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
+                                        let v_size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
+                                        let has_audio = f["acodec"].as_str().map(|a| a != "none").unwrap_or(false);
+                                        let (final_audio_url, total_size) = if has_audio {
+                                            (None, v_size)
+                                        } else {
+                                            (audio_url.clone(), if v_size > 0 { v_size + audio_size } else { 0 })
+                                        };
+
                                         formats.push(ResolvedFormat {
                                             id: format!("vid_{}", h),
                                             quality: label.to_string(),
                                             format: "MP4".to_string(),
                                             url: u.to_string(),
-                                            size,
+                                            audio_url: final_audio_url,
+                                            size: total_size,
                                             media_type: "video".to_string(),
                                             filename: format!("{}_{}.mp4", clean_title, tag),
                                         });
@@ -163,6 +278,7 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                 quality: "MP3 Audio (High Quality)".to_string(),
                                 format: "MP3".to_string(),
                                 url: a_url.clone(),
+                                audio_url: None,
                                 size: audio_size,
                                 media_type: "audio".to_string(),
                                 filename: format!("{}_Audio.mp3", clean_title),
@@ -172,6 +288,7 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                 quality: "WAV Audio (Lossless)".to_string(),
                                 format: "WAV".to_string(),
                                 url: a_url.clone(),
+                                audio_url: None,
                                 size: audio_size,
                                 media_type: "audio".to_string(),
                                 filename: format!("{}_Audio.wav", clean_title),
@@ -181,6 +298,7 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                 quality: "M4A Audio (Original AAC)".to_string(),
                                 format: "M4A".to_string(),
                                 url: a_url,
+                                audio_url: None,
                                 size: audio_size,
                                 media_type: "audio".to_string(),
                                 filename: format!("{}_Audio.m4a", clean_title),
@@ -254,7 +372,6 @@ async fn select_folder() -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn probe_url(url: String) -> Result<ProbeResult, String> {
-    // If it's a video service link, try full resolution
     let resolved = resolve_media_options(&url).await;
     if resolved.success && !resolved.formats.is_empty() {
         let first = &resolved.formats[0];
@@ -294,6 +411,7 @@ async fn start_download(
     app: AppHandle,
     state: State<'_, AppState>,
     url: String,
+    audio_url: Option<String>,
     filename: Option<String>,
     output_dir: Option<String>,
     parts: Option<usize>,
@@ -310,6 +428,7 @@ async fn start_download(
         app,
         state.downloads.clone(),
         url,
+        audio_url,
         filename,
         Some(resolved_out_dir),
         Some(resolved_parts),
@@ -337,6 +456,7 @@ async fn start_download_internal(
     app: AppHandle,
     downloads_map: Arc<Mutex<HashMap<String, DownloadItem>>>,
     url: String,
+    audio_url: Option<String>,
     filename: Option<String>,
     output_dir: Option<String>,
     parts: Option<usize>,
@@ -358,7 +478,7 @@ async fn start_download_internal(
     let item = DownloadItem {
         id: id.clone(),
         url: url.clone(),
-        filename: initial_name,
+        filename: initial_name.clone(),
         target_path: None,
         total_bytes: None,
         downloaded_bytes: 0,
@@ -381,13 +501,13 @@ async fn start_download_internal(
     tauri::async_runtime::spawn(async move {
         let config = DownloadConfig {
             parts,
-            cookies,
-            referer,
-            user_agent: user_agent.unwrap_or_else(|| pew_core::downloader::CHROME_USER_AGENT.to_string()),
+            cookies: cookies.clone(),
+            referer: referer.clone(),
+            user_agent: user_agent.clone().unwrap_or_else(|| pew_core::downloader::CHROME_USER_AGENT.to_string()),
             ..Default::default()
         };
 
-        let downloader = Downloader::new(config);
+        let downloader = Downloader::new(config.clone());
         let (tx, mut rx) = mpsc::unbounded_channel::<DownloadEvent>();
 
         let listener_id = task_id.clone();
@@ -400,6 +520,9 @@ async fn start_download_internal(
                     DownloadEvent::Started { total_bytes, parts, filename } => {
                         let mut map = dl_state.lock().await;
                         if let Some(item) = map.get_mut(&listener_id) {
+                            if item.status == "Completed" {
+                                continue;
+                            }
                             item.filename = filename;
                             item.total_bytes = total_bytes;
                             item.parts = parts;
@@ -410,6 +533,9 @@ async fn start_download_internal(
                     DownloadEvent::Progress { downloaded, total, speed_bps } => {
                         let mut map = dl_state.lock().await;
                         if let Some(item) = map.get_mut(&listener_id) {
+                            if item.status == "Completed" {
+                                continue;
+                            }
                             item.downloaded_bytes = downloaded;
                             item.total_bytes = total;
                             item.speed_bps = speed_bps;
@@ -442,16 +568,183 @@ async fn start_download_internal(
             }
         });
 
-        match downloader.download(&url, &out_dir, filename.as_deref(), Some(tx)).await {
-            Ok(_) => {
-                let _ = progress_tracker.await;
-            }
-            Err(e) => {
+        let target_final_path = out_dir.join(&initial_name);
+
+        if let Some(ref a_url) = audio_url {
+            // Adaptive video stream with separate audio stream -> Download both and mux
+            let temp_vid_name = format!("{}.vid.tmp", task_id);
+            let temp_aud_name = format!("{}.aud.tmp", task_id);
+            let temp_vid_path = out_dir.join(&temp_vid_name);
+            let temp_aud_path = out_dir.join(&temp_aud_name);
+
+            // Channel for video progress
+            let (v_tx, mut v_rx) = mpsc::unbounded_channel::<DownloadEvent>();
+            let main_tx = tx.clone();
+            let v_name = initial_name.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(ev) = v_rx.recv().await {
+                    match ev {
+                        DownloadEvent::Started { total_bytes, parts, .. } => {
+                            let _ = main_tx.send(DownloadEvent::Started {
+                                total_bytes,
+                                parts,
+                                filename: v_name.clone(),
+                            });
+                        }
+                        DownloadEvent::Progress { downloaded, total, speed_bps } => {
+                            let _ = main_tx.send(DownloadEvent::Progress { downloaded, total, speed_bps });
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            // 1. Download video track
+            let dl_vid_res = downloader.download(&url, &out_dir, Some(&temp_vid_name), Some(v_tx)).await;
+            if let Err(e) = dl_vid_res {
+                let _ = tokio::fs::remove_file(&temp_vid_path).await;
                 let mut map = downloads_ref.lock().await;
                 if let Some(item) = map.get_mut(&task_id) {
                     item.status = "Error".to_string();
-                    item.error = Some(e.to_string());
+                    item.error = Some(format!("Video stream error: {}", e));
                     let _ = app_handle.emit("download-update", item.clone());
+                }
+                return;
+            }
+
+            // 2. Download audio track
+            {
+                let mut map = downloads_ref.lock().await;
+                if let Some(item) = map.get_mut(&task_id) {
+                    item.status = "Fetching Audio Stream...".to_string();
+                    item.speed_bps = 0.0;
+                    let _ = app_handle.emit("download-update", item.clone());
+                }
+            }
+
+            let dl_aud_res = downloader.download(a_url, &out_dir, Some(&temp_aud_name), None).await;
+            if let Err(_) = dl_aud_res {
+                // If audio fails, fallback to video only
+                let _ = tokio::fs::rename(&temp_vid_path, &target_final_path).await;
+                let _ = tokio::fs::remove_file(&temp_aud_path).await;
+                let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
+                let _ = tx.send(DownloadEvent::Completed {
+                    path: target_final_path,
+                    total_bytes: final_size,
+                });
+                let _ = progress_tracker.await;
+                return;
+            }
+
+            // 3. Mux Video and Audio via FFmpeg
+            {
+                let mut map = downloads_ref.lock().await;
+                if let Some(item) = map.get_mut(&task_id) {
+                    item.status = "Merging Audio & Video...".to_string();
+                    item.speed_bps = 0.0;
+                    let _ = app_handle.emit("download-update", item.clone());
+                }
+            }
+
+            let ffmpeg = find_ffmpeg().unwrap_or_else(|| PathBuf::from("ffmpeg"));
+            let mux_res = mux_video_audio(&ffmpeg, &temp_vid_path, &temp_aud_path, &target_final_path).await;
+
+            let _ = tokio::fs::remove_file(&temp_vid_path).await;
+            let _ = tokio::fs::remove_file(&temp_aud_path).await;
+
+            if let Err(err) = mux_res {
+                tracing::warn!("FFmpeg mux error: {}. Keeping video stream.", err);
+                let _ = tokio::fs::rename(&temp_vid_path, &target_final_path).await;
+            }
+
+            let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
+            let _ = tx.send(DownloadEvent::Completed {
+                path: target_final_path,
+                total_bytes: final_size,
+            });
+            let _ = progress_tracker.await;
+
+        } else if initial_name.to_lowercase().ends_with(".mp3") || initial_name.to_lowercase().ends_with(".wav") {
+            // Audio conversion to MP3 / WAV
+            let temp_aud_name = format!("{}.raw_aud.tmp", task_id);
+            let temp_aud_path = out_dir.join(&temp_aud_name);
+
+            let (a_tx, mut a_rx) = mpsc::unbounded_channel::<DownloadEvent>();
+            let main_tx = tx.clone();
+            let a_name = initial_name.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(ev) = a_rx.recv().await {
+                    match ev {
+                        DownloadEvent::Started { total_bytes, parts, .. } => {
+                            let _ = main_tx.send(DownloadEvent::Started {
+                                total_bytes,
+                                parts,
+                                filename: a_name.clone(),
+                            });
+                        }
+                        DownloadEvent::Progress { downloaded, total, speed_bps } => {
+                            let _ = main_tx.send(DownloadEvent::Progress { downloaded, total, speed_bps });
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            match downloader.download(&url, &out_dir, Some(&temp_aud_name), Some(a_tx)).await {
+                Ok(_) => {
+                    let target_ext = if initial_name.to_lowercase().ends_with(".mp3") { "mp3" } else { "wav" };
+                    {
+                        let mut map = downloads_ref.lock().await;
+                        if let Some(item) = map.get_mut(&task_id) {
+                            item.status = format!("Converting to {}...", target_ext.to_uppercase());
+                            item.speed_bps = 0.0;
+                            let _ = app_handle.emit("download-update", item.clone());
+                        }
+                    }
+
+                    let ffmpeg = find_ffmpeg().unwrap_or_else(|| PathBuf::from("ffmpeg"));
+                    let conv_res = convert_audio(&ffmpeg, &temp_aud_path, &target_final_path, target_ext).await;
+                    let _ = tokio::fs::remove_file(&temp_aud_path).await;
+
+                    if let Err(err) = conv_res {
+                        let mut map = downloads_ref.lock().await;
+                        if let Some(item) = map.get_mut(&task_id) {
+                            item.status = "Error".to_string();
+                            item.error = Some(err);
+                            let _ = app_handle.emit("download-update", item.clone());
+                        }
+                        return;
+                    }
+
+                    let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
+                    let _ = tx.send(DownloadEvent::Completed {
+                        path: target_final_path,
+                        total_bytes: final_size,
+                    });
+                    let _ = progress_tracker.await;
+                }
+                Err(e) => {
+                    let mut map = downloads_ref.lock().await;
+                    if let Some(item) = map.get_mut(&task_id) {
+                        item.status = "Error".to_string();
+                        item.error = Some(e.to_string());
+                        let _ = app_handle.emit("download-update", item.clone());
+                    }
+                }
+            }
+        } else {
+            // Standard direct file or HLS download
+            match downloader.download(&url, &out_dir, filename.as_deref(), Some(tx)).await {
+                Ok(_) => {
+                    let _ = progress_tracker.await;
+                }
+                Err(e) => {
+                    let mut map = downloads_ref.lock().await;
+                    if let Some(item) = map.get_mut(&task_id) {
+                        item.status = "Error".to_string();
+                        item.error = Some(e.to_string());
+                        let _ = app_handle.emit("download-update", item.clone());
+                    }
                 }
             }
         }
@@ -488,6 +781,11 @@ fn open_file(path: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn exit_app(app: AppHandle) {
+    app.exit(0);
 }
 
 fn dirs_fallback() -> PathBuf {
@@ -557,11 +855,7 @@ Connection: close\r\n\r\n{}",
                 }
 
                 if first_line.contains("/show") {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    show_main_window(&app);
                     let resp = send_response("{\"status\":\"ok\"}");
                     let _ = socket.write_all(resp.as_bytes()).await;
                     let _ = socket.flush().await;
@@ -599,13 +893,10 @@ Connection: close\r\n\r\n{}",
                 }
 
                 if first_line.contains("/download") {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    show_main_window(&app);
 
                     let mut download_url = None;
+                    let mut download_audio_url = None;
                     let mut download_name = None;
                     let mut download_cookies = None;
                     let mut download_referer = None;
@@ -615,6 +906,7 @@ Connection: close\r\n\r\n{}",
                     #[derive(Deserialize)]
                     struct RpcDownloadPayload {
                         url: String,
+                        audio_url: Option<String>,
                         filename: Option<String>,
                         cookies: Option<String>,
                         referer: Option<String>,
@@ -624,6 +916,7 @@ Connection: close\r\n\r\n{}",
 
                     if let Ok(payload) = serde_json::from_str::<RpcDownloadPayload>(body_part.trim()) {
                         download_url = Some(payload.url);
+                        download_audio_url = payload.audio_url;
                         download_name = payload.filename;
                         download_cookies = payload.cookies;
                         download_referer = payload.referer;
@@ -635,6 +928,8 @@ Connection: close\r\n\r\n{}",
                             if let Some((k, v)) = param.split_once('=') {
                                 if k == "url" {
                                     download_url = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                } else if k == "audio_url" {
+                                    download_audio_url = urlencoding::decode(v).ok().map(|s| s.into_owned());
                                 } else if k == "name" || k == "filename" {
                                     download_name = urlencoding::decode(v).ok().map(|s| s.into_owned());
                                 }
@@ -655,6 +950,7 @@ Connection: close\r\n\r\n{}",
                             app,
                             dl_map,
                             url,
+                            download_audio_url,
                             download_name,
                             Some(cfg.download_dir),
                             Some(parts_to_use),
@@ -720,6 +1016,12 @@ fn main() {
 
     tauri::Builder::default()
         .manage(app_state)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(move |app| {
             start_local_rpc_server(app.handle().clone(), downloads_ref, settings_ref);
             Ok(())
@@ -734,7 +1036,8 @@ fn main() {
             get_settings,
             save_settings,
             select_folder,
-            resolve_url_formats
+            resolve_url_formats,
+            exit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
