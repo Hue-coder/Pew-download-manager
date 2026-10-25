@@ -355,6 +355,14 @@ fn register_pew_protocol() {
 }
 
 fn main() {
+    // If an instance is already running, request it to show its window and exit
+    if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:41738") {
+        use std::io::Write;
+        let _ = stream.write_all(b"GET /show HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        let _ = stream.flush();
+        return;
+    }
+
     register_pew_protocol();
 
     let app_state = AppState::default();
