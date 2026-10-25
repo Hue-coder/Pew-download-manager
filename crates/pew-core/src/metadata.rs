@@ -31,9 +31,11 @@ impl RemoteFileInfo {
         let parsed_url = Url::parse(url).map_err(|e| PewError::InvalidUrl(e.to_string()))?;
         
         // Try HEAD first with browser headers; if failed, fall back to Range 0-0 GET
-        let head_req = client.head(url)
-            .header("User-Agent", crate::downloader::CHROME_USER_AGENT)
-            .header("Referer", if url.contains("googlevideo.com") { "https://www.youtube.com/" } else { "" });
+        let mut head_req = client.head(url)
+            .header("User-Agent", crate::downloader::CHROME_USER_AGENT);
+        if url.contains("googlevideo.com") {
+            head_req = head_req.header("Referer", "https://www.youtube.com/");
+        }
 
         let response = match head_req.send().await {
             Ok(resp) if resp.status().is_success() => resp,
