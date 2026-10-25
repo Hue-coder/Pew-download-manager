@@ -107,7 +107,7 @@ async fn start_download_internal(
     let task_id = id.clone();
     let app_handle = app.clone();
 
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let config = DownloadConfig {
             parts,
             ..Default::default()
@@ -120,7 +120,7 @@ async fn start_download_internal(
         let app_listener = app_handle.clone();
         let dl_state = downloads_ref.clone();
 
-        let progress_tracker = tokio::spawn(async move {
+        let progress_tracker = tauri::async_runtime::spawn(async move {
             while let Some(event) = rx.recv().await {
                 match event {
                     DownloadEvent::Started { total_bytes, parts, filename } => {
@@ -213,20 +213,20 @@ fn dirs_fallback() -> PathBuf {
 
 // Background Local RPC Server to communicate with the browser extension
 fn start_local_rpc_server(app_handle: AppHandle, downloads_map: Arc<Mutex<HashMap<String, DownloadItem>>>) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
         let listener = match TcpListener::bind("127.0.0.1:41738").await {
             Ok(l) => l,
-            Err(_) => return, // Port already in use or restricted
+            Err(_) => return,
         };
 
         while let Ok((mut socket, _)) = listener.accept().await {
             let app = app_handle.clone();
             let dl_map = downloads_map.clone();
 
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 let mut buffer = [0u8; 8192];
                 let n = match socket.read(&mut buffer).await {
                     Ok(n) if n > 0 => n,
@@ -234,42 +234,57 @@ fn start_local_rpc_server(app_handle: AppHandle, downloads_map: Arc<Mutex<HashMa
                 };
 
                 let request = String::from_utf8_lossy(&buffer[..n]);
-                let (first_line, body) = match request.split_once("\r\n\r\n") {
-                    Some((h, b)) => (h.lines().next().unwrap_or(""), b),
-                    None => (request.lines().next().unwrap_or(""), ""),
+                let (headers_part, body_part) = match request.split_once("\r\n\r\n") {
+                    Some((h, b)) => (h, b),
+                    None => (request.as_ref(), ""),
                 };
 
-                let cors_headers = "HTTP/1.1 200 OK\r\n\
+                let first_line = headers_part.lines().next().unwrap_or("");
+
+                let send_response = |body_str: &str| {
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
 Access-Control-Allow-Origin: *\r\n\
 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
 Access-Control-Allow-Headers: Content-Type\r\n\
-Content-Type: application/json\r\n\r\n";
+Content-Type: application/json\r\n\
+Content-Length: {}\r\n\
+Connection: close\r\n\r\n{}",
+                        body_str.len(),
+                        body_str
+                    )
+                };
 
                 if first_line.starts_with("OPTIONS") {
-                    let _ = socket.write_all(cors_headers.as_bytes()).await;
-                    return;
-                }
-
-                if first_line.starts_with("POST /show") || first_line.starts_with("GET /show") {
-                    // Bring main window to front
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                    let resp = format!("{} {{\"status\":\"ok\"}}", cors_headers);
+                    let resp = send_response("{\"status\":\"ok\"}");
                     let _ = socket.write_all(resp.as_bytes()).await;
+                    let _ = socket.flush().await;
                     return;
                 }
 
-                if first_line.starts_with("POST /download") {
-                    // Bring main window to front
+                if first_line.contains("/show") {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    let resp = send_response("{\"status\":\"ok\"}");
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    return;
+                }
+
+                if first_line.contains("/download") {
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.unminimize();
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
 
+                    let mut download_url = None;
+                    let mut download_name = None;
+
+                    // Parse JSON body if present
                     #[derive(Deserialize)]
                     struct RpcDownloadPayload {
                         url: String,
@@ -277,25 +292,44 @@ Content-Type: application/json\r\n\r\n";
                         parts: Option<usize>,
                     }
 
-                    if let Ok(payload) = serde_json::from_str::<RpcDownloadPayload>(body) {
+                    if let Ok(payload) = serde_json::from_str::<RpcDownloadPayload>(body_part.trim()) {
+                        download_url = Some(payload.url);
+                        download_name = payload.filename;
+                    } else if let Some(query_start) = first_line.find('?') {
+                        // Fallback: parse query parameters /download?url=...&name=...
+                        let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
+                        for param in query.split('&') {
+                            if let Some((k, v)) = param.split_once('=') {
+                                if k == "url" {
+                                    download_url = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                } else if k == "name" || k == "filename" {
+                                    download_name = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(url) = download_url {
                         let _ = start_download_internal(
                             app,
                             dl_map,
-                            payload.url,
-                            payload.filename,
+                            url,
+                            download_name,
                             None,
-                            payload.parts,
+                            Some(8),
                         ).await;
 
-                        let resp = format!("{} {{\"success\":true}}", cors_headers);
+                        let resp = send_response("{\"success\":true}");
                         let _ = socket.write_all(resp.as_bytes()).await;
+                        let _ = socket.flush().await;
                         return;
                     }
                 }
 
                 // Default health check response
-                let resp = format!("{} {{\"app\":\"pew\",\"status\":\"running\"}}", cors_headers);
+                let resp = send_response("{\"app\":\"pew\",\"status\":\"running\"}");
                 let _ = socket.write_all(resp.as_bytes()).await;
+                let _ = socket.flush().await;
             });
         }
     });
