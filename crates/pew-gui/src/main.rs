@@ -190,6 +190,44 @@ async fn convert_audio(ffmpeg_exe: &Path, in_path: &Path, out_path: &Path, targe
     }).await.map_err(|e| e.to_string())?
 }
 
+async fn download_hls_ffmpeg(
+    ffmpeg_exe: &Path,
+    m3u8_url: &str,
+    target_path: &Path,
+    user_agent: &str,
+    referer: Option<&str>,
+) -> Result<(), String> {
+    let out_str = target_path.to_string_lossy().to_string();
+    let ffmpeg_str = ffmpeg_exe.to_string_lossy().to_string();
+    let url_owned = m3u8_url.to_string();
+    let ua_owned = user_agent.to_string();
+    let ref_owned = referer.map(|s| s.to_string());
+
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(ffmpeg_str);
+        cmd.args(["-y", "-user_agent", &ua_owned]);
+        if let Some(r) = ref_owned {
+            cmd.args(["-headers", &format!("Referer: {}\r\n", r)]);
+        }
+        cmd.args([
+            "-i", &url_owned,
+            "-c", "copy",
+            "-bsf:a", "aac_adtstoasc",
+            "-movflags", "+faststart",
+            &out_str,
+        ]);
+
+        match cmd.output() {
+            Ok(o) if o.status.success() => Ok(()),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                Err(format!("FFmpeg HLS error: {}", err))
+            }
+            Err(e) => Err(format!("Could not run FFmpeg for HLS: {}", e)),
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+
 fn show_main_window(app: &AppHandle) {
     let win = app.get_webview_window("main").or_else(|| {
         app.webview_windows().into_values().next()
@@ -225,7 +263,6 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                     let clean_title = raw_title.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_");
 
                     let mut formats = Vec::new();
-                    let mut seen_heights = std::collections::HashSet::new();
                     let mut audio_url = None;
                     let mut audio_size = 0u64;
 
@@ -244,22 +281,92 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                             }
                         }
 
-                        // Collect target video resolutions in priority order: 4K, 2K, 1080p, 720p, 480p, 360p
-                        let target_heights = [2160, 1440, 1080, 720, 480, 360];
-                        for target_h in target_heights {
+                        fn classify_format(f: &serde_json::Value) -> Option<(&'static str, &'static str, &'static str)> {
+                            let h = f["height"].as_u64().unwrap_or(0);
+                            let w = f["width"].as_u64().unwrap_or(0);
+                            let note = f["format_note"].as_str().unwrap_or("").to_lowercase();
+
+                            if h >= 1800 || (w >= 3200 && h >= 1600) || note.contains("2160") {
+                                Some(("vid_2160", "4K", "4K Ultra HD (2160p)"))
+                            } else if (h >= 1250 && h < 1800) || (w >= 2200 && w < 3200 && h >= 1100) || note.contains("1440") {
+                                Some(("vid_1440", "2K", "2K Quad HD (1440p)"))
+                            } else if (h >= 800 && h < 1250) || (w >= 1600 && w < 2200 && h >= 720) || note.contains("1080") {
+                                Some(("vid_1080", "1080p", "1080p Full HD"))
+                            } else if (h >= 500 && h < 800) || (w >= 1100 && w < 1600 && h >= 480) || note.contains("720") {
+                                Some(("vid_720", "720p", "720p HD"))
+                            } else if (h >= 380 && h < 500) || (w >= 700 && w < 1100 && h >= 360) || note.contains("480") {
+                                Some(("vid_480", "480p", "480p SD"))
+                            } else if (h >= 240 && h < 380) || (w >= 400 && w < 700 && h >= 240) || note.contains("360") {
+                                Some(("vid_360", "360p", "360p"))
+                            } else {
+                                None
+                            }
+                        }
+
+                        let target_order = [
+                            ("vid_2160", "4K", "4K Ultra HD (2160p)"),
+                            ("vid_1440", "2K", "2K Quad HD (1440p)"),
+                            ("vid_1080", "1080p", "1080p Full HD"),
+                            ("vid_720", "720p", "720p HD"),
+                            ("vid_480", "480p", "480p SD"),
+                            ("vid_360", "360p", "360p"),
+                        ];
+
+                        for (tier_id, tag, label) in target_order {
+                            let mut best_format: Option<&serde_json::Value> = None;
+                            let mut best_score = 0.0;
+
                             for f in formats_arr {
-                                let h = f["height"].as_u64().unwrap_or(0);
-                                if h == target_h && !seen_heights.contains(&h) {
+                                if f["vcodec"].as_str().unwrap_or("none") == "none" {
+                                    continue;
+                                }
+                                if let Some(u) = f["url"].as_str() {
+                                    if u.is_empty() {
+                                        continue;
+                                    }
+                                    if let Some((f_id, _, _)) = classify_format(f) {
+                                        if f_id == tier_id {
+                                            let tbr = f["tbr"].as_f64().unwrap_or(0.0);
+                                            let fps = f["fps"].as_u64().unwrap_or(0) as f64;
+                                            let score = tbr + fps * 10.0;
+                                            if best_format.is_none() || score > best_score {
+                                                best_score = score;
+                                                best_format = Some(f);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(f) = best_format {
+                                let u = f["url"].as_str().unwrap();
+                                let v_size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
+                                let has_audio = f["acodec"].as_str().map(|a| a != "none").unwrap_or(false);
+                                let (final_audio_url, total_size) = if has_audio {
+                                    (None, v_size)
+                                } else {
+                                    (audio_url.clone(), if v_size > 0 { v_size + audio_size } else { 0 })
+                                };
+
+                                formats.push(ResolvedFormat {
+                                    id: tier_id.to_string(),
+                                    quality: label.to_string(),
+                                    format: "MP4".to_string(),
+                                    url: u.to_string(),
+                                    audio_url: final_audio_url,
+                                    size: total_size,
+                                    media_type: "video".to_string(),
+                                    filename: format!("{}_{}.mp4", clean_title, tag),
+                                });
+                            }
+                        }
+
+                        // Universal Fallback: If no standard tier matched, pick best video stream
+                        if formats.is_empty() {
+                            for f in formats_arr.iter().rev() {
+                                if f["vcodec"].as_str().unwrap_or("none") != "none" {
                                     if let Some(u) = f["url"].as_str() {
-                                        seen_heights.insert(h);
-                                        let (tag, label) = match h {
-                                            2160 => ("4K", "4K Ultra HD (2160p)"),
-                                            1440 => ("2K", "2K Quad HD (1440p)"),
-                                            1080 => ("1080p", "1080p Full HD"),
-                                            720 => ("720p", "720p HD"),
-                                            480 => ("480p", "480p SD"),
-                                            _ => ("360p", "360p"),
-                                        };
+                                        let h = f["height"].as_u64().unwrap_or(0);
                                         let v_size = f["filesize"].as_u64().or_else(|| f["filesize_approx"].as_u64()).unwrap_or(0);
                                         let has_audio = f["acodec"].as_str().map(|a| a != "none").unwrap_or(false);
                                         let (final_audio_url, total_size) = if has_audio {
@@ -267,16 +374,16 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                         } else {
                                             (audio_url.clone(), if v_size > 0 { v_size + audio_size } else { 0 })
                                         };
-
+                                        let quality_str = if h > 0 { format!("{}p Video", h) } else { "Best Video".to_string() };
                                         formats.push(ResolvedFormat {
-                                            id: format!("vid_{}", h),
-                                            quality: label.to_string(),
+                                            id: "vid_best".to_string(),
+                                            quality: quality_str,
                                             format: "MP4".to_string(),
                                             url: u.to_string(),
                                             audio_url: final_audio_url,
                                             size: total_size,
                                             media_type: "video".to_string(),
-                                            filename: format!("{}_{}.mp4", clean_title, tag),
+                                            filename: format!("{}_Video.mp4", clean_title),
                                         });
                                         break;
                                     }
@@ -745,8 +852,51 @@ async fn start_download_internal(
                     }
                 }
             }
+        } else if url.contains(".m3u8") || url.contains("/hls/") || url.contains("manifest/hls") {
+            // HLS stream (Pinterest, streaming sites) -> Download via FFmpeg for complete video+audio muxing
+            let ffmpeg = find_ffmpeg().unwrap_or_else(|| PathBuf::from("ffmpeg"));
+            {
+                let mut map = downloads_ref.lock().await;
+                if let Some(item) = map.get_mut(&task_id) {
+                    item.status = "Downloading HLS Stream...".to_string();
+                    let _ = app_handle.emit("download-update", item.clone());
+                }
+            }
+
+            let dl_res = download_hls_ffmpeg(
+                &ffmpeg,
+                &url,
+                &target_final_path,
+                &config.user_agent,
+                referer.as_deref(),
+            ).await;
+
+            match dl_res {
+                Ok(_) => {
+                    let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
+                    let _ = tx.send(DownloadEvent::Completed {
+                        path: target_final_path,
+                        total_bytes: final_size,
+                    });
+                    let _ = progress_tracker.await;
+                }
+                Err(err) => {
+                    tracing::warn!("FFmpeg HLS failed ({}), fallback to internal downloader", err);
+                    match downloader.download(&url, &out_dir, filename.as_deref(), Some(tx)).await {
+                        Ok(_) => { let _ = progress_tracker.await; }
+                        Err(e) => {
+                            let mut map = downloads_ref.lock().await;
+                            if let Some(item) = map.get_mut(&task_id) {
+                                item.status = "Error".to_string();
+                                item.error = Some(e.to_string());
+                                let _ = app_handle.emit("download-update", item.clone());
+                            }
+                        }
+                    }
+                }
+            }
         } else {
-            // Standard direct file or HLS download
+            // Standard direct file
             match downloader.download(&url, &out_dir, filename.as_deref(), Some(tx)).await {
                 Ok(_) => {
                     let _ = progress_tracker.await;

@@ -142,6 +142,9 @@ chrome.webRequest.onHeadersReceived.addListener(
       else if (name === 'content-length') contentLength = parseInt(h.value || '0', 10);
     }
 
+    // Avoid polluting tab media list with background suggestion previews from Pinterest or YouTube chunks
+    if (url.includes('googlevideo.com') || url.includes('pinimg.com')) return;
+
     if (url.includes('.m3u8') || contentType.includes('mpegurl')) {
       addDirectMediaItem(details.tabId, {
         id: 'hls_' + hashStr(url),
