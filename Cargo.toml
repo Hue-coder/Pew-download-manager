@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/pew-core",
     "crates/pew-cli",
+    "crates/pew-gui",
 ]
 
 [workspace.package]

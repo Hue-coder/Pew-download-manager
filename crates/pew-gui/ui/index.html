@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pew Download Manager</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h2>PEW</h2>
+          <span>DOWNLOAD MANAGER</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <div class="nav-section-title">TASKS</div>
+        <button class="nav-item active" data-filter="all">
+          <span class="icon">📁</span> All Downloads
+          <span class="badge" id="count-all">0</span>
+        </button>
+        <button class="nav-item" data-filter="downloading">
+          <span class="icon">⚡</span> Downloading
+          <span class="badge active-badge" id="count-downloading">0</span>
+        </button>
+        <button class="nav-item" data-filter="completed">
+          <span class="icon">✅</span> Completed
+          <span class="badge" id="count-completed">0</span>
+        </button>
+
+        <div class="nav-section-title">CATEGORIES</div>
+        <button class="nav-item" data-filter="video"><span class="icon">🎬</span> Videos</button>
+        <button class="nav-item" data-filter="compressed"><span class="icon">🗜️</span> Compressed</button>
+        <button class="nav-item" data-filter="document"><span class="icon">📄</span> Documents</button>
+        <button class="nav-item" data-filter="software"><span class="icon">💻</span> Programs</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="stats-box">
+          <div class="stats-label">GLOBAL SPEED</div>
+          <div class="stats-value" id="global-speed">0.0 KB/s</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Top Action Bar -->
+      <header class="top-bar">
+        <div class="action-buttons">
+          <button class="btn btn-primary" id="btn-add-modal">
+            <span class="btn-icon">+</span> Add Download
+          </button>
+          <button class="btn btn-secondary" id="btn-resume-all" title="Resume All">▶ Resume</button>
+          <button class="btn btn-secondary" id="btn-pause-all" title="Pause All">⏸ Pause</button>
+        </div>
+
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="search-input" placeholder="Search downloads...">
+        </div>
+      </header>
+
+      <!-- Downloads Table Container -->
+      <div class="table-container">
+        <table class="downloads-table">
+          <thead>
+            <tr>
+              <th style="width: 32%;">File Name</th>
+              <th style="width: 12%;">Size</th>
+              <th style="width: 26%;">Progress</th>
+              <th style="width: 12%;">Speed</th>
+              <th style="width: 10%;">Status</th>
+              <th style="width: 8%; text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody id="downloads-body">
+            <!-- Dynamic rows will be inserted here -->
+          </tbody>
+        </table>
+
+        <!-- Empty State -->
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">⚡</div>
+          <h3>No downloads yet</h3>
+          <p>Click "Add Download" above or copy a download link to get started.</p>
+        </div>
+      </div>
+
+      <!-- Bottom Status Bar -->
+      <footer class="status-bar">
+        <div class="status-left">
+          <span class="status-dot"></span>
+          <span id="active-tasks-label">Engine Ready</span>
+        </div>
+        <div class="status-right">
+          <span>Pew v0.1.0 • Rust Core</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Add Download Modal -->
+  <div class="modal-overlay" id="add-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚡ New Download</h3>
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label>URL</label>
+          <div class="input-with-btn">
+            <input type="text" id="modal-url" placeholder="Paste direct download URL (https://...)" autofocus>
+            <button class="btn btn-secondary" id="btn-paste-clipboard">Paste</button>
+          </div>
+        </div>
+
+        <div class="probe-loading" id="probe-loading" style="display: none;">
+          <span class="spinner"></span> Probing server details...
+        </div>
+
+        <div class="probe-info" id="probe-info" style="display: none;">
+          <div class="info-row">
+            <span class="label">Detected File:</span>
+            <input type="text" id="modal-filename" class="inline-input">
+          </div>
+          <div class="info-row">
+            <span class="label">File Size:</span>
+            <span class="val" id="probe-size">Unknown</span>
+          </div>
+          <div class="info-row">
+            <span class="label">Multi-thread:</span>
+            <span class="val badge-success" id="probe-ranges">Supported</span>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-top: 1rem;">
+          <div class="slider-header">
+            <label>Connections (Parts): <strong id="parts-val">8</strong></label>
+          </div>
+          <input type="range" id="modal-parts" min="1" max="32" value="8" class="range-slider">
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
+        <button class="btn btn-primary" id="modal-start-btn">Start Download</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
