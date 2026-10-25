@@ -32,11 +32,10 @@ pew-download-manager/
 │   │   │   ├── metadata.rs       # Server probing & filename extraction
 │   │   │   └── error.rs          # Structured error handling
 │   │   └── Cargo.toml
-│   └── pew-cli/                  # Terminal-based client with live progress bar
-│       ├── src/
-│       │   └── main.rs
-│       └── Cargo.toml
-└── extensions/                   # (Upcoming) WebExtension for Chrome/Firefox
+│   ├── pew-cli/                  # Terminal-based client with live progress bar
+│   └── pew-gui/                  # Modern desktop GUI built with Tauri v2
+└── extensions/
+    └── pew-browser-extension/    # Chrome/Edge Manifest V3 Video Sniffer & Grabber
 ```
 
 ---
