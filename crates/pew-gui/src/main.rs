@@ -202,6 +202,7 @@ async fn download_hls_ffmpeg(
     let url_owned = m3u8_url.to_string();
     let ua_owned = user_agent.to_string();
     let ref_owned = referer.map(|s| s.to_string());
+    let ext = target_path.extension().and_then(|s| s.to_str()).unwrap_or("mp4").to_lowercase();
 
     tokio::task::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(ffmpeg_str);
@@ -209,13 +210,27 @@ async fn download_hls_ffmpeg(
         if let Some(r) = ref_owned {
             cmd.args(["-headers", &format!("Referer: {}\r\n", r)]);
         }
-        cmd.args([
-            "-i", &url_owned,
-            "-c", "copy",
-            "-bsf:a", "aac_adtstoasc",
-            "-movflags", "+faststart",
-            &out_str,
-        ]);
+        cmd.args(["-i", &url_owned]);
+
+        match ext.as_str() {
+            "mp3" => {
+                cmd.args(["-vn", "-c:a", "libmp3lame", "-q:a", "2", &out_str]);
+            }
+            "wav" => {
+                cmd.args(["-vn", "-c:a", "pcm_s16le", &out_str]);
+            }
+            "m4a" | "aac" => {
+                cmd.args(["-vn", "-c:a", "copy", "-movflags", "+faststart", &out_str]);
+            }
+            _ => {
+                cmd.args([
+                    "-c", "copy",
+                    "-bsf:a", "aac_adtstoasc",
+                    "-movflags", "+faststart",
+                    &out_str,
+                ]);
+            }
+        }
 
         match cmd.output() {
             Ok(o) if o.status.success() => Ok(()),

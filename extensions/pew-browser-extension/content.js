@@ -69,66 +69,89 @@
     return Math.abs(h);
   }
 
-  // 1. Pinterest Specific Main Pin Video Extractor (never returns blob:)
+  // 1. Pinterest Specific Main Pin Video Extractor (never returns blob: or broken URLs)
   function extractPinterestPinMedia() {
     if (!window.location.hostname.includes('pinterest.')) return null;
 
-    let foundUrls = [];
+    let hlsUrl = null;
+    let mp4Url = null;
+    let foundTitle = '';
 
-    // 1. Check __PWS_DATA__ script tag
+    // 1. Parse __PWS_DATA__ script
     const pwsScript = document.getElementById('__PWS_DATA__');
     if (pwsScript && pwsScript.textContent) {
       try {
         const text = pwsScript.textContent;
-        const m3u8Matches = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[^\s"'<>]+\.m3u8[^\s"'<>]*/g) || [];
-        const mp4Matches = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[^\s"'<>]+\.mp4[^\s"'<>]*/g) || [];
-        foundUrls.push(...m3u8Matches, ...mp4Matches);
+
+        // Recursive search for video_list in JSON
+        try {
+          const data = JSON.parse(text);
+          function searchVideoList(obj) {
+            if (!obj || typeof obj !== 'object') return;
+            if (obj.video_list && typeof obj.video_list === 'object') {
+              const vl = obj.video_list;
+              if (vl.V_HLSV4 && vl.V_HLSV4.url) hlsUrl = vl.V_HLSV4.url;
+              if (vl.V_EXP720P && vl.V_EXP720P.url) mp4Url = vl.V_EXP720P.url;
+              else if (vl.V_720P && vl.V_720P.url) mp4Url = vl.V_720P.url;
+              else if (vl.V_480P && vl.V_480P.url) mp4Url = vl.V_480P.url;
+              return;
+            }
+            for (const k in obj) {
+              if (obj.hasOwnProperty(k)) {
+                searchVideoList(obj[k]);
+                if (hlsUrl && mp4Url) return;
+              }
+            }
+          }
+          searchVideoList(data);
+        } catch (je) {
+          const m3u8 = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[^\s"'<>]+\.m3u8[^\s"'<>]*/);
+          if (m3u8) hlsUrl = m3u8[0];
+          const expMp4 = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/mc\/expMp4\/[^\s"'<>]+\.mp4[^\s"'<>]*/);
+          if (expMp4) mp4Url = expMp4[0];
+          else {
+            const mp4 = text.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[^\s"'<>]+\.mp4[^\s"'<>]*/);
+            if (mp4) mp4Url = mp4[0];
+          }
+        }
       } catch (e) {}
     }
 
     // 2. Check application/ld+json scripts
-    document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
-      try {
-        const json = JSON.parse(s.textContent);
-        if (json.contentUrl && json.contentUrl.includes('pinimg.com')) {
-          foundUrls.push(json.contentUrl);
-        }
-      } catch (e) {}
-    });
+    if (!hlsUrl || !mp4Url) {
+      document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+        try {
+          const json = JSON.parse(s.textContent);
+          if (json.contentUrl && json.contentUrl.includes('pinimg.com')) {
+            if (json.contentUrl.includes('.m3u8') && !hlsUrl) hlsUrl = json.contentUrl;
+            if (json.contentUrl.includes('.mp4') && !mp4Url) mp4Url = json.contentUrl;
+          }
+          if (json.name && !foundTitle) foundTitle = json.name;
+        } catch (e) {}
+      });
+    }
 
-    // 3. Check browser performance resource timing API for requested video files
-    try {
-      const resources = performance.getEntriesByType('resource');
-      for (const r of resources) {
-        if (r.name && (r.name.includes('pinimg.com/videos') || r.name.includes('.m3u8') || r.name.includes('.mp4'))) {
-          if (!r.name.startsWith('blob:') && !foundUrls.includes(r.name)) {
-            foundUrls.push(r.name);
+    // 3. Check performance timing API for recently requested video streams
+    if (!hlsUrl) {
+      try {
+        const resources = performance.getEntriesByType('resource');
+        for (const r of resources) {
+          if (r.name && r.name.includes('pinimg.com/videos') && r.name.includes('.m3u8')) {
+            hlsUrl = r.name;
+            break;
           }
         }
-      }
-    } catch (e) {}
-
-    // 4. Raw HTML regex fallback
-    if (foundUrls.length === 0) {
-      try {
-        const html = document.documentElement.innerHTML;
-        const matches = html.match(/https?:\/\/(?:v1|v)\.pinimg\.com\/videos\/[a-zA-Z0-9_\-\/]+(?:\.m3u8|\.mp4)/g) || [];
-        foundUrls.push(...matches);
       } catch (e) {}
     }
 
-    // Filter out blob: and keep valid http(s) URLs
-    const cleanUrls = Array.from(new Set(foundUrls)).filter(u => u.startsWith('http') && !u.startsWith('blob:') && (u.includes('.m3u8') || u.includes('.mp4')));
+    if (!hlsUrl && !mp4Url) return null;
 
-    if (cleanUrls.length === 0) return null;
-
-    const rawTitle = (document.title || 'Pinterest_Video').replace(/[\/\\:*?"<>|]/g, '_').trim();
+    const rawTitle = (foundTitle || document.title || 'Pinterest_Video').replace(/[\/\\:*?"<>|]/g, '_').trim();
     const cleanTitle = rawTitle.replace(/[\s\-_]+/g, '_').substring(0, 40) || 'Pinterest_Video';
 
     let items = [];
 
-    // Prioritize HLS stream (contains full synchronized audio via FFmpeg!)
-    const hlsUrl = cleanUrls.find(u => u.includes('.m3u8'));
+    // Option 1: Pinterest HD (with Sound) via HLS (Best quality + 100% full audio)
     if (hlsUrl) {
       items.push({
         id: 'pin_hls_' + hashStr(hlsUrl),
@@ -140,10 +163,21 @@
         size: 0,
         priority: 1
       });
+
+      // Option 2: Extract audio track as MP3
+      items.push({
+        id: 'pin_aud_' + hashStr(hlsUrl),
+        url: hlsUrl,
+        filename: `${cleanTitle}_Audio.mp3`,
+        format: 'MP3',
+        quality: 'MP3 Audio (High Quality)',
+        mediaType: 'audio',
+        size: 0,
+        priority: 3
+      });
     }
 
-    // Direct MP4 option
-    const mp4Url = cleanUrls.find(u => u.includes('.mp4')) || (hlsUrl ? hlsUrl.replace('/hls/', '/720p/').replace('.m3u8', '.mp4') : null);
+    // Option 3: Direct verified MP4 (only if an authentic MP4 URL was found on the page)
     if (mp4Url) {
       items.push({
         id: 'pin_mp4_' + hashStr(mp4Url),
@@ -157,7 +191,7 @@
       });
     }
 
-    return items.length > 0 ? items : null;
+    return items;
   }
 
   // 2. Resolve media via local Pew resolver or background
