@@ -1,8 +1,18 @@
 // Pew In-Page Video Grabber (Content Script)
 (function() {
+  // Suppress harmless context-invalidated messages when extension is reloaded
+  window.addEventListener('error', (e) => {
+    if (e.message && e.message.includes('Extension context invalidated')) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }
+  }, true);
+
   // Clean up any existing widget from previous reloads to prevent zombie widgets
-  const oldWidget = document.getElementById('pew-floating-widget');
-  if (oldWidget) oldWidget.remove();
+  try {
+    const oldWidget = document.getElementById('pew-floating-widget');
+    if (oldWidget) oldWidget.remove();
+  } catch (e) {}
 
   let mediaList = [];
   let panelContainer = null;
@@ -12,10 +22,9 @@
   // Safe Extension Messaging (immune to "Extension context invalidated")
   function safeSendMessage(msg, callback) {
     try {
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+      if (typeof chrome !== 'undefined' && chrome && chrome.runtime && chrome.runtime.id) {
         chrome.runtime.sendMessage(msg, (res) => {
           if (chrome.runtime.lastError) {
-            // Context was invalidated during flight
             if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
               directHttpDownload(msg.url, msg.filename);
             }
@@ -46,53 +55,53 @@
         user_agent: navigator.userAgent,
         parts: 8
       })
-    }).catch(err => {
-      console.warn('Direct Pew download failed:', err);
-    });
+    }).catch(() => {});
   }
 
   // 1. Resolve media via local Pew resolver or background
   async function queryMedia() {
-    const pageUrl = window.location.href;
-    if (!pageUrl.startsWith('http')) return;
-
-    // Direct local resolve
     try {
-      const resp = await fetch(`http://127.0.0.1:41738/resolve?url=${encodeURIComponent(pageUrl)}`, {
-        signal: AbortSignal.timeout(5000)
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
-          mediaList = data.formats.map(f => ({
-            id: f.id,
-            url: f.url,
-            filename: f.filename,
-            format: f.format,
-            quality: f.quality,
-            mediaType: f.media_type,
-            size: f.size,
-          }));
-          renderOrUpdateFloatingPanel();
-          return;
-        }
-      }
-    } catch (e) {}
+      const pageUrl = window.location.href;
+      if (!pageUrl.startsWith('http')) return;
 
-    // Fallback to background query
-    safeSendMessage({ action: 'GET_TAB_MEDIA' }, (res) => {
-      if (res && res.media && res.media.length > 0) {
-        mediaList = res.media;
-        renderOrUpdateFloatingPanel();
-      } else {
-        safeSendMessage({ action: 'REQUEST_RESOLVE', url: pageUrl, title: document.title }, (r2) => {
-          if (r2 && r2.media && r2.media.length > 0) {
-            mediaList = r2.media;
-            renderOrUpdateFloatingPanel();
-          }
+      // Direct local resolve
+      try {
+        const resp = await fetch(`http://127.0.0.1:41738/resolve?url=${encodeURIComponent(pageUrl)}`, {
+          signal: AbortSignal.timeout(5000)
         });
-      }
-    });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
+            mediaList = data.formats.map(f => ({
+              id: f.id,
+              url: f.url,
+              filename: f.filename,
+              format: f.format,
+              quality: f.quality,
+              mediaType: f.media_type,
+              size: f.size,
+            }));
+            renderOrUpdateFloatingPanel();
+            return;
+          }
+        }
+      } catch (e) {}
+
+      // Fallback to background query
+      safeSendMessage({ action: 'GET_TAB_MEDIA' }, (res) => {
+        if (res && res.media && res.media.length > 0) {
+          mediaList = res.media;
+          renderOrUpdateFloatingPanel();
+        } else {
+          safeSendMessage({ action: 'REQUEST_RESOLVE', url: pageUrl, title: document.title }, (r2) => {
+            if (r2 && r2.media && r2.media.length > 0) {
+              mediaList = r2.media;
+              renderOrUpdateFloatingPanel();
+            }
+          });
+        }
+      });
+    } catch (e) {}
   }
 
   // Initial query and navigation handlers
@@ -102,7 +111,7 @@
 
   // Listen to background broadcast
   try {
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    if (typeof chrome !== 'undefined' && chrome && chrome.runtime && chrome.runtime.onMessage) {
       chrome.runtime.onMessage.addListener((message) => {
         if (message.action === 'PEW_MEDIA_FOUND') {
           mediaList = message.allMedia || [];
@@ -113,16 +122,18 @@
   } catch (e) {}
 
   function renderOrUpdateFloatingPanel() {
-    if (mediaList.length === 0) return;
+    try {
+      if (mediaList.length === 0) return;
 
-    if (!panelContainer) {
-      createFloatingPanel();
-    }
+      if (!panelContainer) {
+        createFloatingPanel();
+      }
 
-    const badge = panelContainer.querySelector('.pew-badge');
-    if (badge) badge.textContent = mediaList.length;
+      const badge = panelContainer ? panelContainer.querySelector('.pew-badge') : null;
+      if (badge) badge.textContent = mediaList.length;
 
-    renderDropdownItems();
+      renderDropdownItems();
+    } catch (e) {}
   }
 
   function createFloatingPanel() {
@@ -180,18 +191,22 @@
     // Tab buttons
     panelContainer.querySelectorAll('.pew-tab-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        panelContainer.querySelectorAll('.pew-tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeTabFilter = btn.dataset.tab;
-        renderDropdownItems();
+        try {
+          e.stopPropagation();
+          panelContainer.querySelectorAll('.pew-tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          activeTabFilter = btn.dataset.tab;
+          renderDropdownItems();
+        } catch (err) {}
       });
     });
 
     document.addEventListener('click', (e) => {
-      if (!panelContainer.contains(e.target)) {
-        dropdownMenu.style.display = 'none';
-      }
+      try {
+        if (!panelContainer.contains(e.target)) {
+          dropdownMenu.style.display = 'none';
+        }
+      } catch (err) {}
     });
 
     makeDraggable(panelContainer, pillBtn);
@@ -200,6 +215,7 @@
   function renderDropdownItems() {
     if (!dropdownMenu) return;
     const listEl = dropdownMenu.querySelector('.pew-dropdown-list');
+    if (!listEl) return;
     listEl.innerHTML = '';
 
     const filtered = mediaList.filter(item => {
@@ -255,28 +271,36 @@
       `;
 
       itemEl.querySelector('.pew-action-download').addEventListener('click', (e) => {
-        e.stopPropagation();
-        safeSendMessage({
-          action: 'TRIGGER_PEW_DOWNLOAD',
-          url: item.url,
-          filename: cleanName
-        });
+        try {
+          e.stopPropagation();
+          safeSendMessage({
+            action: 'TRIGGER_PEW_DOWNLOAD',
+            url: item.url,
+            filename: cleanName
+          });
 
-        const dlBtn = itemEl.querySelector('.pew-action-download');
-        dlBtn.textContent = '✓ Sent!';
-        dlBtn.style.background = '#10b981';
-        setTimeout(() => {
-          dlBtn.textContent = '⚡ Download';
-          dlBtn.style.background = '';
-        }, 2000);
+          const dlBtn = itemEl.querySelector('.pew-action-download');
+          if (dlBtn) {
+            dlBtn.textContent = '✓ Sent!';
+            dlBtn.style.background = '#10b981';
+            setTimeout(() => {
+              dlBtn.textContent = '⚡ Download';
+              dlBtn.style.background = '';
+            }, 2000);
+          }
+        } catch (err) {}
       });
 
       itemEl.querySelector('.pew-action-copy').addEventListener('click', (e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(item.url);
-        const copyBtn = itemEl.querySelector('.pew-action-copy');
-        copyBtn.textContent = '✓';
-        setTimeout(() => copyBtn.textContent = '📋', 1500);
+        try {
+          e.stopPropagation();
+          navigator.clipboard.writeText(item.url);
+          const copyBtn = itemEl.querySelector('.pew-action-copy');
+          if (copyBtn) {
+            copyBtn.textContent = '✓';
+            setTimeout(() => copyBtn.textContent = '📋', 1500);
+          }
+        } catch (err) {}
       });
 
       listEl.appendChild(itemEl);
