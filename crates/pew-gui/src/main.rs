@@ -261,9 +261,14 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_always_on_top(true);
         let _ = window.set_focus();
-        let _ = window.set_always_on_top(false);
+
+        let w_clone = window.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            let _ = w_clone.set_always_on_top(false);
+        });
     } else {
-        let _ = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        let _ = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
             .title("Pew Download Manager")
             .inner_size(1080.0, 700.0)
             .min_inner_size(850.0, 550.0)
