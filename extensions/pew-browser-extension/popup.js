@@ -26,22 +26,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkPewStatus();
 
   // Open Pew App button (Wakes up running app or launches via custom protocol)
-  openGuiBtn.addEventListener('click', () => {
+  openGuiBtn.addEventListener('click', async () => {
     openGuiBtn.textContent = '✓ Opening...';
+
+    // 1. Try waking running app via background service worker and direct POST
     chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' });
-    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {});
-
-    // If desktop core is offline, launch directly via Windows custom protocol
-    fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(500) })
-      .catch(() => {
-        try {
-          chrome.tabs.create({ url: 'pew://show', active: false }, (t) => {
-            setTimeout(() => { if (t && t.id) chrome.tabs.remove(t.id).catch(() => {}); }, 1500);
-          });
-        } catch (e) {}
+    try {
+      const res = await fetch('http://127.0.0.1:41738/show', {
+        method: 'POST',
+        signal: AbortSignal.timeout(600)
       });
+      if (res.ok) {
+        setTimeout(() => window.close(), 400);
+        return;
+      }
+    } catch (e) {}
 
-    setTimeout(() => openGuiBtn.innerHTML = '<span>🖥️ Open Pew App</span>', 2000);
+    // 2. If desktop core was offline, launch directly via Windows custom protocol
+    window.location.href = 'pew://show';
+    setTimeout(() => {
+      openGuiBtn.innerHTML = '<span>🖥️ Open Pew App</span>';
+      window.close();
+    }, 600);
   });
 
   // Tab Filtering

@@ -1258,6 +1258,18 @@ fn register_pew_protocol() {
             let _ = Command::new("reg")
                 .args(["add", r"HKCU\Software\Classes\pew\shell\open\command", "/ve", "/d", &format!("\"{}\" \"%1\"", exe_str), "/f"])
                 .output();
+
+            // Auto-start with Windows so Pew background server is always active on PC boot
+            let _ = Command::new("reg")
+                .args([
+                    "add",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v", "PewDownloadManager",
+                    "/t", "REG_SZ",
+                    "/d", &format!("\"{}\" --minimized", exe_str),
+                    "/f"
+                ])
+                .output();
         }
     }
 }
@@ -1299,6 +1311,13 @@ fn main() {
             }
         })
         .setup(move |app| {
+            let args: Vec<String> = std::env::args().collect();
+            let is_background = args.iter().any(|a| a == "--minimized" || a == "--background" || a == "-b");
+            if is_background {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
             start_local_rpc_server(app.handle().clone(), downloads_ref, settings_ref);
             Ok(())
         })
