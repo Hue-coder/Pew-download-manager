@@ -43,7 +43,7 @@ async function resolvePageMedia(url, tabId, pageTitle) {
 
   try {
     const resolveEndpoint = `http://127.0.0.1:41738/resolve?url=${encodeURIComponent(url)}`;
-    const resp = await fetch(resolveEndpoint, { signal: AbortSignal.timeout(8000) });
+    const resp = await fetch(resolveEndpoint, { signal: AbortSignal.timeout(15000) });
     if (!resp.ok) return [];
 
     const data = await resp.json();
@@ -232,7 +232,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'SHOW_PEW_APP') {
-    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {});
+    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {
+      try {
+        chrome.tabs.create({ url: 'pew://show', active: false }, (t) => {
+          setTimeout(() => { if (t && t.id) chrome.tabs.remove(t.id).catch(() => {}); }, 1500);
+        });
+      } catch (e) {}
+    });
     sendResponse({ success: true });
     return true;
   }

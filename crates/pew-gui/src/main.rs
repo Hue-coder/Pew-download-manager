@@ -272,11 +272,31 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+static RESOLVE_CACHE: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (std::time::Instant, MediaResolveResult)>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
 async fn resolve_media_options(url: &str) -> MediaResolveResult {
-    let url_owned = url.to_string();
+    let clean_url = url.split('#').next().unwrap_or(url).to_string();
+    if let Ok(cache) = RESOLVE_CACHE.lock() {
+        if let Some((instant, res)) = cache.get(&clean_url) {
+            if instant.elapsed() < std::time::Duration::from_secs(300) {
+                return res.clone();
+            }
+        }
+    }
+
+    let url_owned = clean_url.clone();
     let result = tokio::task::spawn_blocking(move || {
         let output = std::process::Command::new("python")
-            .args(["-m", "yt_dlp", "-J", "--no-warnings", &url_owned])
+            .args([
+                "-m", "yt_dlp",
+                "-J",
+                "--no-warnings",
+                "--no-playlist",
+                "--extractor-args", "youtube:player_client=android,web",
+                "--socket-timeout", "6",
+                &url_owned,
+            ])
             .output();
 
         if let Ok(o) = output {
@@ -467,11 +487,19 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
         }
     }).await;
 
-    result.unwrap_or(MediaResolveResult {
+    let final_res = result.unwrap_or(MediaResolveResult {
         success: false,
         title: "Error".to_string(),
         formats: Vec::new(),
-    })
+    });
+
+    if final_res.success && !final_res.formats.is_empty() {
+        if let Ok(mut cache) = RESOLVE_CACHE.lock() {
+            cache.insert(clean_url, (std::time::Instant::now(), final_res.clone()));
+        }
+    }
+
+    final_res
 }
 
 #[tauri::command]
@@ -1066,6 +1094,7 @@ fn start_local_rpc_server(
 Access-Control-Allow-Origin: *\r\n\
 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
 Access-Control-Allow-Headers: Content-Type\r\n\
+Access-Control-Allow-Private-Network: true\r\n\
 Content-Type: application/json\r\n\
 Content-Length: {}\r\n\
 Connection: close\r\n\r\n{}",

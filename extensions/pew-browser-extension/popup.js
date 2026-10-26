@@ -25,10 +25,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   checkPewStatus();
 
-  // Open Pew App button
+  // Open Pew App button (Wakes up running app or launches via custom protocol)
   openGuiBtn.addEventListener('click', () => {
-    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {});
     openGuiBtn.textContent = '✓ Opening...';
+    chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' });
+    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {});
+
+    // If desktop core is offline, launch directly via Windows custom protocol
+    fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(500) })
+      .catch(() => {
+        try {
+          chrome.tabs.create({ url: 'pew://show', active: false }, (t) => {
+            setTimeout(() => { if (t && t.id) chrome.tabs.remove(t.id).catch(() => {}); }, 1500);
+          });
+        } catch (e) {}
+      });
+
     setTimeout(() => openGuiBtn.innerHTML = '<span>🖥️ Open Pew App</span>', 2000);
   });
 
@@ -48,31 +60,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const tabUrl = activeTab.url;
 
-  // 1. Try direct resolve via local Pew Core
-  try {
-    const resolveResp = await fetch(`http://127.0.0.1:41738/resolve?url=${encodeURIComponent(tabUrl)}`, {
-      signal: AbortSignal.timeout(6000)
-    });
-    if (resolveResp.ok) {
-      const data = await resolveResp.json();
-      if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
-        currentMedia = data.formats.map(f => ({
-          id: f.id,
-          url: f.url,
-          audio_url: f.audio_url || undefined,
-          filename: f.filename,
-          format: f.format,
-          quality: f.quality,
-          mediaType: f.media_type,
-          size: f.size || 0
-        }));
-        renderMediaCards();
-        return;
-      }
-    }
-  } catch (e) {}
-
-  // 2. Fallback to background store
+  // 1. Instant check: Display existing background cached media immediately (0ms)
   if (activeTab.id) {
     chrome.runtime.sendMessage({ action: 'GET_TAB_MEDIA', tabId: activeTab.id }, (response) => {
       const media = (response && response.media) || [];
@@ -80,8 +68,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentMedia = media;
         renderMediaCards();
       } else {
-        emptyEl.style.display = 'flex';
-        listEl.style.display = 'none';
+        // 2. Not cached yet: Request background resolve with feedback
+        chrome.runtime.sendMessage({ action: 'REQUEST_RESOLVE', url: tabUrl, title: activeTab.title }, (r2) => {
+          const m2 = (r2 && r2.media) || [];
+          if (m2.length > 0) {
+            currentMedia = m2;
+            renderMediaCards();
+          } else {
+            emptyEl.style.display = 'flex';
+            listEl.style.display = 'none';
+          }
+        });
       }
     });
   }
