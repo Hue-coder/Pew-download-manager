@@ -293,8 +293,7 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                 "-J",
                 "--no-warnings",
                 "--no-playlist",
-                "--extractor-args", "youtube:player_client=android,web",
-                "--socket-timeout", "6",
+                "--socket-timeout", "8",
                 &url_owned,
             ])
             .output();
