@@ -243,6 +243,14 @@ async fn download_hls_ffmpeg(
     }).await.map_err(|e| e.to_string())?
 }
 
+async fn safe_move_file(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    if let Err(_) = tokio::fs::rename(from, to).await {
+        tokio::fs::copy(from, to).await?;
+        let _ = tokio::fs::remove_file(from).await;
+    }
+    Ok(())
+}
+
 fn show_main_window(app: &AppHandle) {
     let win = app.get_webview_window("main").or_else(|| {
         app.webview_windows().into_values().next()
@@ -727,12 +735,16 @@ async fn start_download_internal(
 
         let target_final_path = out_dir.join(&initial_name);
 
+        // Isolated temporary directory in system temp to keep user's destination folder 100% clean
+        let temp_base_dir = std::env::temp_dir().join("PewDownloads").join(&task_id);
+        let _ = tokio::fs::create_dir_all(&temp_base_dir).await;
+
         if let Some(ref a_url) = audio_url {
-            // Adaptive video stream with separate audio stream -> Download both and mux
-            let temp_vid_name = format!("{}.vid.tmp", task_id);
-            let temp_aud_name = format!("{}.aud.tmp", task_id);
-            let temp_vid_path = out_dir.join(&temp_vid_name);
-            let temp_aud_path = out_dir.join(&temp_aud_name);
+            // Adaptive video stream with separate audio stream -> Download both into temp folder and mux
+            let temp_vid_name = "video.tmp".to_string();
+            let temp_aud_name = "audio.tmp".to_string();
+            let temp_vid_path = temp_base_dir.join(&temp_vid_name);
+            let temp_aud_path = temp_base_dir.join(&temp_aud_name);
 
             // Channel for video progress
             let (v_tx, mut v_rx) = mpsc::unbounded_channel::<DownloadEvent>();
@@ -756,10 +768,10 @@ async fn start_download_internal(
                 }
             });
 
-            // 1. Download video track
-            let dl_vid_res = downloader.download(&url, &out_dir, Some(&temp_vid_name), Some(v_tx)).await;
+            // 1. Download video track into temp folder
+            let dl_vid_res = downloader.download(&url, &temp_base_dir, Some(&temp_vid_name), Some(v_tx)).await;
             if let Err(e) = dl_vid_res {
-                let _ = tokio::fs::remove_file(&temp_vid_path).await;
+                let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                 let mut map = downloads_ref.lock().await;
                 if let Some(item) = map.get_mut(&task_id) {
                     item.status = "Error".to_string();
@@ -769,7 +781,7 @@ async fn start_download_internal(
                 return;
             }
 
-            // 2. Download audio track
+            // 2. Download audio track into temp folder
             {
                 let mut map = downloads_ref.lock().await;
                 if let Some(item) = map.get_mut(&task_id) {
@@ -779,11 +791,11 @@ async fn start_download_internal(
                 }
             }
 
-            let dl_aud_res = downloader.download(a_url, &out_dir, Some(&temp_aud_name), None).await;
+            let dl_aud_res = downloader.download(a_url, &temp_base_dir, Some(&temp_aud_name), None).await;
             if let Err(_) = dl_aud_res {
-                // If audio fails, fallback to video only
-                let _ = tokio::fs::rename(&temp_vid_path, &target_final_path).await;
-                let _ = tokio::fs::remove_file(&temp_aud_path).await;
+                // If audio fails, fallback to video only and safely move to destination
+                let _ = safe_move_file(&temp_vid_path, &target_final_path).await;
+                let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                 let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
                 let _ = tx.send(DownloadEvent::Completed {
                     path: target_final_path,
@@ -793,7 +805,7 @@ async fn start_download_internal(
                 return;
             }
 
-            // 3. Mux Video and Audio via FFmpeg
+            // 3. Mux Video and Audio via FFmpeg directly to target_final_path
             {
                 let mut map = downloads_ref.lock().await;
                 if let Some(item) = map.get_mut(&task_id) {
@@ -806,13 +818,12 @@ async fn start_download_internal(
             let ffmpeg = find_ffmpeg().unwrap_or_else(|| PathBuf::from("ffmpeg"));
             let mux_res = mux_video_audio(&ffmpeg, &temp_vid_path, &temp_aud_path, &target_final_path).await;
 
-            let _ = tokio::fs::remove_file(&temp_vid_path).await;
-            let _ = tokio::fs::remove_file(&temp_aud_path).await;
-
             if let Err(err) = mux_res {
                 tracing::warn!("FFmpeg mux error: {}. Keeping video stream.", err);
-                let _ = tokio::fs::rename(&temp_vid_path, &target_final_path).await;
+                let _ = safe_move_file(&temp_vid_path, &target_final_path).await;
             }
+
+            let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
 
             let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
             let _ = tx.send(DownloadEvent::Completed {
@@ -823,8 +834,8 @@ async fn start_download_internal(
 
         } else if initial_name.to_lowercase().ends_with(".mp3") || initial_name.to_lowercase().ends_with(".wav") {
             // Audio conversion to MP3 / WAV
-            let temp_aud_name = format!("{}.raw_aud.tmp", task_id);
-            let temp_aud_path = out_dir.join(&temp_aud_name);
+            let temp_aud_name = "raw_audio.tmp".to_string();
+            let temp_aud_path = temp_base_dir.join(&temp_aud_name);
 
             let (a_tx, mut a_rx) = mpsc::unbounded_channel::<DownloadEvent>();
             let main_tx = tx.clone();
@@ -847,7 +858,7 @@ async fn start_download_internal(
                 }
             });
 
-            match downloader.download(&url, &out_dir, Some(&temp_aud_name), Some(a_tx)).await {
+            match downloader.download(&url, &temp_base_dir, Some(&temp_aud_name), Some(a_tx)).await {
                 Ok(_) => {
                     let target_ext = if initial_name.to_lowercase().ends_with(".mp3") { "mp3" } else { "wav" };
                     {
@@ -861,7 +872,7 @@ async fn start_download_internal(
 
                     let ffmpeg = find_ffmpeg().unwrap_or_else(|| PathBuf::from("ffmpeg"));
                     let conv_res = convert_audio(&ffmpeg, &temp_aud_path, &target_final_path, target_ext).await;
-                    let _ = tokio::fs::remove_file(&temp_aud_path).await;
+                    let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
 
                     if let Err(err) = conv_res {
                         let mut map = downloads_ref.lock().await;
@@ -881,6 +892,7 @@ async fn start_download_internal(
                     let _ = progress_tracker.await;
                 }
                 Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                     let mut map = downloads_ref.lock().await;
                     if let Some(item) = map.get_mut(&task_id) {
                         item.status = "Error".to_string();
@@ -890,7 +902,7 @@ async fn start_download_internal(
                 }
             }
         } else if url.contains(".m3u8") || url.contains("/hls/") || url.contains("manifest/hls") {
-            // HLS stream (Pinterest, streaming sites) -> Download via FFmpeg for complete video+audio muxing
+            // HLS stream (Pinterest, streaming sites) -> Download via FFmpeg into temp folder, then move
             let ffmpeg = find_ffmpeg().unwrap_or_else(|| PathBuf::from("ffmpeg"));
             {
                 let mut map = downloads_ref.lock().await;
@@ -900,16 +912,19 @@ async fn start_download_internal(
                 }
             }
 
+            let temp_hls_path = temp_base_dir.join("hls_stream.tmp");
             let dl_res = download_hls_ffmpeg(
                 &ffmpeg,
                 &url,
-                &target_final_path,
+                &temp_hls_path,
                 &config.user_agent,
                 referer.as_deref(),
             ).await;
 
             match dl_res {
                 Ok(_) => {
+                    let _ = safe_move_file(&temp_hls_path, &target_final_path).await;
+                    let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                     let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
                     let _ = tx.send(DownloadEvent::Completed {
                         path: target_final_path,
@@ -919,9 +934,16 @@ async fn start_download_internal(
                 }
                 Err(err) => {
                     tracing::warn!("FFmpeg HLS failed ({}), fallback to internal downloader", err);
-                    match downloader.download(&url, &out_dir, filename.as_deref(), Some(tx)).await {
-                        Ok(_) => { let _ = progress_tracker.await; }
+                    let temp_dl_name = "hls_fb.tmp".to_string();
+                    match downloader.download(&url, &temp_base_dir, Some(&temp_dl_name), Some(tx)).await {
+                        Ok(_) => {
+                            let fb_path = temp_base_dir.join(&temp_dl_name);
+                            let _ = safe_move_file(&fb_path, &target_final_path).await;
+                            let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
+                            let _ = progress_tracker.await;
+                        }
                         Err(e) => {
+                            let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                             let mut map = downloads_ref.lock().await;
                             if let Some(item) = map.get_mut(&task_id) {
                                 item.status = "Error".to_string();
@@ -933,12 +955,17 @@ async fn start_download_internal(
                 }
             }
         } else {
-            // Standard direct file
-            match downloader.download(&url, &out_dir, filename.as_deref(), Some(tx)).await {
+            // Standard direct file -> Download into temp folder, move to destination when 100% complete
+            let temp_direct_name = format!("{}.part", task_id);
+            match downloader.download(&url, &temp_base_dir, Some(&temp_direct_name), Some(tx)).await {
                 Ok(_) => {
+                    let dl_path = temp_base_dir.join(&temp_direct_name);
+                    let _ = safe_move_file(&dl_path, &target_final_path).await;
+                    let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                     let _ = progress_tracker.await;
                 }
                 Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
                     let mut map = downloads_ref.lock().await;
                     if let Some(item) = map.get_mut(&task_id) {
                         item.status = "Error".to_string();
@@ -1093,8 +1120,6 @@ Connection: close\r\n\r\n{}",
                 }
 
                 if first_line.contains("/download") {
-                    show_main_window(&app);
-
                     let mut download_url = None;
                     let mut download_audio_url = None;
                     let mut download_name = None;
@@ -1102,6 +1127,7 @@ Connection: close\r\n\r\n{}",
                     let mut download_referer = None;
                     let mut download_ua = None;
                     let mut download_parts = None;
+                    let mut download_open_ui = false;
 
                     #[derive(Deserialize)]
                     struct RpcDownloadPayload {
@@ -1112,6 +1138,7 @@ Connection: close\r\n\r\n{}",
                         referer: Option<String>,
                         user_agent: Option<String>,
                         parts: Option<usize>,
+                        open_ui: Option<bool>,
                     }
 
                     if let Ok(payload) = serde_json::from_str::<RpcDownloadPayload>(body_part.trim()) {
@@ -1122,6 +1149,7 @@ Connection: close\r\n\r\n{}",
                         download_referer = payload.referer;
                         download_ua = payload.user_agent;
                         download_parts = payload.parts;
+                        download_open_ui = payload.open_ui.unwrap_or(false);
                     } else if let Some(query_start) = first_line.find('?') {
                         let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
                         for param in query.split('&') {
@@ -1132,9 +1160,15 @@ Connection: close\r\n\r\n{}",
                                     download_audio_url = urlencoding::decode(v).ok().map(|s| s.into_owned());
                                 } else if k == "name" || k == "filename" {
                                     download_name = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                } else if k == "open_ui" {
+                                    download_open_ui = v == "true" || v == "1";
                                 }
                             }
                         }
+                    }
+
+                    if download_open_ui {
+                        show_main_window(&app);
                     }
 
                     if let Some(url) = download_url {

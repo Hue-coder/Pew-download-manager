@@ -509,12 +509,12 @@
 
           const dlBtn = itemEl.querySelector('.pew-action-download');
           if (dlBtn) {
-            dlBtn.textContent = '✓ Sent!';
+            dlBtn.textContent = '✓ Downloading in Pew...';
             dlBtn.style.background = '#10b981';
             setTimeout(() => {
               dlBtn.textContent = '⚡ Download';
               dlBtn.style.background = '';
-            }, 2000);
+            }, 3000);
           }
         } catch (err) {}
       });

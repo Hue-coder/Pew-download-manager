@@ -165,14 +165,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         const btn = card.querySelector('.btn-dl');
-        btn.textContent = '✓ Sent to Pew!';
+        btn.textContent = '✓ Downloading in Pew...';
         btn.style.background = '#10b981';
         btn.style.color = '#fff';
         setTimeout(() => {
           btn.textContent = '⚡ Download with Pew';
           btn.style.background = '#06b6d4';
           btn.style.color = '#041017';
-        }, 2000);
+        }, 3000);
       });
 
       card.querySelector('.btn-copy').addEventListener('click', () => {

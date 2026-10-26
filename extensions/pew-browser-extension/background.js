@@ -7,6 +7,10 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('chrome:')) {
     return;
   }
+  const clean = url.split('?')[0].toLowerCase();
+  if (clean.endsWith('.ts') || clean.includes('/segment') || clean.includes('/frag')) {
+    return;
+  }
 
   try {
     const health = await fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(1000) }).then(r => r.json());
@@ -162,7 +166,10 @@ chrome.webRequest.onHeadersReceived.addListener(
     }
 
     const cleanUrl = url.split('?')[0].toLowerCase();
-    const hasVideoExt = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv', '.ts'].some(e => cleanUrl.endsWith(e));
+    // Ignore internal streaming segments/chunks to keep file manager and download list clean
+    if (cleanUrl.endsWith('.ts') || cleanUrl.includes('.ts?') || cleanUrl.includes('/segment') || cleanUrl.includes('/frag') || cleanUrl.includes('range=')) return;
+
+    const hasVideoExt = ['.mp4', '.m4v', '.webm', '.mkv', '.mov', '.avi', '.flv'].some(e => cleanUrl.endsWith(e));
     if (hasVideoExt || (contentType.startsWith('video/') && !contentType.includes('html'))) {
       if (contentLength > 0 && contentLength < 100 * 1024) return;
       if (url.includes('googlevideo.com')) return;
