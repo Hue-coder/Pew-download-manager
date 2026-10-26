@@ -20,44 +20,20 @@
   let activeTabFilter = 'all'; // 'all', 'video', 'audio'
   let isCustomPositioned = false;
 
-  // Safe Extension Messaging
+  // Safe Extension Messaging (Always routes via background service worker to prevent PNA network dialogs)
   function safeSendMessage(msg, callback) {
     try {
       if (typeof chrome !== 'undefined' && chrome && chrome.runtime && chrome.runtime.id) {
         chrome.runtime.sendMessage(msg, (res) => {
           if (chrome.runtime.lastError) {
-            if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
-              directHttpDownload(msg.url, msg.audio_url, msg.filename);
-            }
             return;
           }
           if (callback) callback(res);
         });
-      } else {
-        if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
-          directHttpDownload(msg.url, msg.audio_url, msg.filename);
-        }
       }
     } catch (e) {
-      if (msg.action === 'TRIGGER_PEW_DOWNLOAD') {
-        directHttpDownload(msg.url, msg.audio_url, msg.filename);
-      }
+      // Ignore extension context invalidation
     }
-  }
-
-  function directHttpDownload(url, audio_url, filename) {
-    fetch('http://127.0.0.1:41738/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: url,
-        audio_url: audio_url || undefined,
-        filename: filename,
-        referer: window.location.href,
-        user_agent: navigator.userAgent,
-        parts: 8
-      })
-    }).catch(() => {});
   }
 
   function hashStr(str) {
@@ -208,31 +184,7 @@
         return;
       }
 
-      // Direct local resolver for YouTube, Vimeo, social platforms
-      try {
-        const resp = await fetch(`http://127.0.0.1:41738/resolve?url=${encodeURIComponent(pageUrl)}`, {
-          signal: AbortSignal.timeout(6000)
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data && data.success && Array.isArray(data.formats) && data.formats.length > 0) {
-            mediaList = data.formats.map(f => ({
-              id: f.id,
-              url: f.url,
-              audio_url: f.audio_url || undefined,
-              filename: f.filename,
-              format: f.format,
-              quality: f.quality,
-              mediaType: f.media_type,
-              size: f.size,
-            }));
-            renderOrUpdateFloatingPanel();
-            return;
-          }
-        }
-      } catch (e) {}
-
-      // Fallback to background store
+      // Query formats via background service worker (prevents browser Private Network Access warnings)
       safeSendMessage({ action: 'GET_TAB_MEDIA' }, (res) => {
         if (res && res.media && res.media.length > 0) {
           mediaList = res.media;
