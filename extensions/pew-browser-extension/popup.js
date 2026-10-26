@@ -25,29 +25,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   checkPewStatus();
 
+  // Intercept Toggle
+  const interceptToggle = document.getElementById('toggle-intercept');
+  if (interceptToggle) {
+    chrome.storage.local.get({ auto_intercept: false }, (res) => {
+      interceptToggle.checked = !!res.auto_intercept;
+    });
+    interceptToggle.addEventListener('change', (e) => {
+      chrome.storage.local.set({ auto_intercept: e.target.checked });
+    });
+  }
+
   // Open Pew App button (Wakes up running app or launches via custom protocol)
-  openGuiBtn.addEventListener('click', async () => {
-    openGuiBtn.textContent = '✓ Opening...';
-
-    // 1. Try waking running app via background service worker and direct POST
-    chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' });
-    try {
-      const res = await fetch('http://127.0.0.1:41738/show', {
-        method: 'POST',
-        signal: AbortSignal.timeout(600)
-      });
-      if (res.ok) {
-        setTimeout(() => window.close(), 400);
-        return;
-      }
-    } catch (e) {}
-
-    // 2. If desktop core was offline, launch directly via Windows custom protocol
-    window.location.href = 'pew://show';
-    setTimeout(() => {
-      openGuiBtn.innerHTML = '<span>🖥️ Open Pew App</span>';
-      window.close();
-    }, 600);
+  openGuiBtn.addEventListener('click', () => {
+    openGuiBtn.innerHTML = '<span>⏳ Opening Pew...</span>';
+    chrome.runtime.sendMessage({ action: 'SHOW_PEW_APP' }, () => {
+      openGuiBtn.innerHTML = '<span>✓ Pew Opened</span>';
+      setTimeout(() => window.close(), 500);
+    });
   });
 
   // Tab Filtering
@@ -152,19 +147,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           alert('Cannot download browser-internal blob URL. Please refresh the page to resolve the stream.');
           return;
         }
-        fetch('http://127.0.0.1:41738/download', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: item.url,
-            audio_url: item.audio_url || undefined,
-            filename: filename,
-            referer: tabUrl,
-            user_agent: navigator.userAgent,
-            parts: 8
-          })
-        }).catch(() => {
-          chrome.downloads.download({ url: item.url, filename, saveAs: true });
+
+        chrome.runtime.sendMessage({
+          action: 'TRIGGER_PEW_DOWNLOAD',
+          url: item.url,
+          audio_url: item.audio_url || undefined,
+          filename: filename
         });
 
         const btn = card.querySelector('.btn-dl');

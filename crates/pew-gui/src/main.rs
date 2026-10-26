@@ -257,15 +257,16 @@ fn show_main_window(app: &AppHandle) {
     });
 
     if let Some(window) = win {
-        let _ = window.show();
         let _ = window.unminimize();
-        let _ = window.set_always_on_top(true);
+        let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.set_always_on_top(true);
 
         let w_clone = window.clone();
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             let _ = w_clone.set_always_on_top(false);
+            let _ = w_clone.set_focus();
         });
     } else {
         let _ = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
@@ -640,6 +641,14 @@ async fn start_download_internal(
     user_agent: Option<String>,
     open_folder_on_finish: bool,
 ) -> Result<String, String> {
+    // Avoid starting duplicate active downloads for the same exact URL
+    {
+        let map = downloads_map.lock().await;
+        if let Some(existing) = map.values().find(|i| i.url == url && (i.status == "Downloading" || i.status == "Starting")) {
+            return Ok(existing.id.clone());
+        }
+    }
+
     let id = format!("dl_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
     let parts = parts.unwrap_or(8).clamp(1, 32);
 

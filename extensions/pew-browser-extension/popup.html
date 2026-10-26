@@ -241,6 +241,58 @@
       color: #64748b;
       line-height: 1.4;
     }
+
+    .intercept-bar {
+      padding: 6px 12px;
+      background: #080d1a;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .intercept-label {
+      font-size: 10px;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 28px;
+      height: 16px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #334155;
+      border-radius: 16px;
+      transition: .2s;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 12px;
+      width: 12px;
+      left: 2px;
+      bottom: 2px;
+      background-color: white;
+      border-radius: 50%;
+      transition: .2s;
+    }
+    .switch input:checked + .slider {
+      background-color: #06b6d4;
+    }
+    .switch input:checked + .slider:before {
+      transform: translateX(12px);
+    }
   </style>
 </head>
 <body>
@@ -260,6 +312,14 @@
     <button class="btn-open-app" id="btn-open-gui">
       <span>🖥️ Open Pew App</span>
     </button>
+  </div>
+
+  <div class="intercept-bar">
+    <span class="intercept-label">📦 Catch Browser Files (.zip, .exe)</span>
+    <label class="switch" title="Toggle automatic interception of browser ZIP/EXE downloads">
+      <input type="checkbox" id="toggle-intercept">
+      <span class="slider"></span>
+    </label>
   </div>
 
   <div class="tabs-bar">

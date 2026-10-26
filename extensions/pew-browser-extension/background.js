@@ -1,18 +1,34 @@
 // Pew Integration Background Service Worker (Robust Media Resolver & Sniffer)
 const tabMediaStore = new Map(); // tabId -> Array of media items
+const EXTENSION_START_TIME = Date.now();
 
-// 1. Automatic Download Interception
+// 1. Browser Download Interception (Disabled by default to prevent hijacking unwanted browser downloads)
+// Only catches explicit archive/installer downloads if the user explicitly turns it on in extension settings.
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
-  const url = downloadItem.finalUrl || downloadItem.url;
-  if (!url || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('chrome:')) {
-    return;
-  }
-  const clean = url.split('?')[0].toLowerCase();
-  if (clean.endsWith('.ts') || clean.includes('/segment') || clean.includes('/frag')) {
-    return;
-  }
-
   try {
+    const settings = await chrome.storage.local.get({ auto_intercept: false });
+    if (!settings.auto_intercept) {
+      return;
+    }
+
+    // Never intercept during the first 15 seconds after browser startup
+    if (Date.now() - EXTENSION_START_TIME < 15000) {
+      return;
+    }
+
+    const url = downloadItem.finalUrl || downloadItem.url;
+    if (!url || !url.startsWith('http')) {
+      return;
+    }
+
+    // Strict whitelist: Only intercept archive & installer files (.zip, .rar, .7z, .iso, .exe, .msi)
+    const clean = url.split('?')[0].toLowerCase();
+    const allowedExts = ['.zip', '.rar', '.7z', '.tar', '.gz', '.iso', '.exe', '.msi', '.dmg'];
+    const isAllowed = allowedExts.some(ext => clean.endsWith(ext));
+    if (!isAllowed) {
+      return;
+    }
+
     const health = await fetch('http://127.0.0.1:41738/health', { signal: AbortSignal.timeout(1000) }).then(r => r.json());
     if (health && health.status === 'running') {
       chrome.downloads.cancel(downloadItem.id).catch(() => {});
@@ -33,7 +49,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       });
     }
   } catch (e) {
-    // Desktop app offline, browser handles normally
+    // Desktop app offline or request failed, browser handles download normally
   }
 });
 
@@ -232,14 +248,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'SHOW_PEW_APP') {
-    fetch('http://127.0.0.1:41738/show', { method: 'POST' }).catch(() => {
-      try {
-        chrome.tabs.create({ url: 'pew://show', active: false }, (t) => {
-          setTimeout(() => { if (t && t.id) chrome.tabs.remove(t.id).catch(() => {}); }, 1500);
-        });
-      } catch (e) {}
-    });
-    sendResponse({ success: true });
+    fetch('http://127.0.0.1:41738/show', { method: 'POST', signal: AbortSignal.timeout(2000) })
+      .then(() => sendResponse({ success: true }))
+      .catch(() => {
+        try {
+          chrome.tabs.create({ url: 'pew://show', active: true });
+        } catch (e) {}
+        sendResponse({ success: false, launchedProtocol: true });
+      });
     return true;
   }
 

@@ -406,7 +406,10 @@
 
     openAppBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      safeSendMessage({ action: 'SHOW_PEW_APP' });
+      openAppBtn.textContent = '⏳ Opening...';
+      safeSendMessage({ action: 'SHOW_PEW_APP' }, () => {
+        setTimeout(() => { openAppBtn.textContent = '🖥️ Open Pew App'; }, 1200);
+      });
     });
 
     // Tab buttons
