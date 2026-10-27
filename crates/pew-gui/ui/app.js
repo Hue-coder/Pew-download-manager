@@ -1,4 +1,7 @@
-// Pew Download Manager Frontend Logic
+// ==========================================================================
+// Pew Download Manager - AB Download Manager Inspired Frontend
+// ==========================================================================
+
 const tauri = window.__TAURI__;
 const invoke = tauri ? (tauri.core ? tauri.core.invoke : tauri.invoke) : null;
 const listen = tauri ? (tauri.event ? tauri.event.listen : null) : null;
@@ -9,6 +12,10 @@ const state = {
   activeFilter: 'all',
   currentView: 'downloads', // 'downloads' or 'settings'
   searchQuery: '',
+  selectedIds: new Set(),
+  detailModalId: null,
+  sortField: 'date',
+  sortAsc: false,
   settings: {
     download_dir: '',
     max_connections: 8,
@@ -18,27 +25,46 @@ const state = {
   }
 };
 
-// DOM Elements
-const downloadsView = document.getElementById('downloads-view');
-const settingsView = document.getElementById('settings-view');
-const btnViewDownloads = document.getElementById('btn-view-downloads');
+// DOM References
 const bodyEl = document.getElementById('downloads-body');
 const emptyStateEl = document.getElementById('empty-state');
+const downloadsView = document.getElementById('downloads-view');
+const settingsView = document.getElementById('settings-view');
+const btnBackDownloads = document.getElementById('btn-back-downloads');
+const searchInput = document.getElementById('search-input');
+const searchClearBtn = document.getElementById('search-clear-btn');
+const thSelectAll = document.getElementById('th-select-all');
+
+// Modals
 const addModal = document.getElementById('add-modal');
 const modalUrlInput = document.getElementById('modal-url');
 const modalFilenameInput = document.getElementById('modal-filename');
 const modalPartsSlider = document.getElementById('modal-parts');
 const partsValLabel = document.getElementById('parts-val');
 const probeLoading = document.getElementById('probe-loading');
-const probeInfo = document.getElementById('probe-info');
 const probeSize = document.getElementById('probe-size');
-const probeRanges = document.getElementById('probe-ranges');
-const globalSpeedEl = document.getElementById('global-speed');
-const activeTasksLabel = document.getElementById('active-tasks-label');
-const topSearchBox = document.getElementById('top-search-box');
-const savePathIndicator = document.getElementById('save-path-indicator');
+const modalSavePath = document.getElementById('modal-save-path');
+const rowFormatSelect = document.getElementById('row-format-select');
+const modalFormatSelect = document.getElementById('modal-format-select');
+const advancedBox = document.getElementById('advanced-box');
 
-// Settings DOM Elements
+// Detail Modal
+const detailModal = document.getElementById('detail-modal');
+const detailHeaderTitle = document.getElementById('detail-header-title');
+const detailName = document.getElementById('detail-name');
+const detailStatus = document.getElementById('detail-status');
+const detailSize = document.getElementById('detail-size');
+const detailDownloaded = document.getElementById('detail-downloaded');
+const detailSpeed = document.getElementById('detail-speed');
+const detailRemaining = document.getElementById('detail-remaining');
+const detailProgressBar = document.getElementById('detail-progress-bar');
+const detailPartBlocks = document.getElementById('detail-part-blocks');
+
+// Context Menu
+const contextMenu = document.getElementById('row-context-menu');
+let contextTargetId = null;
+
+// Settings Controls
 const settingDownloadDir = document.getElementById('setting-download-dir');
 const settingMaxConnections = document.getElementById('setting-max-connections');
 const settingThreadsVal = document.getElementById('setting-threads-val');
@@ -49,9 +75,22 @@ const btnSaveSettings = document.getElementById('btn-save-settings');
 const saveStatusMsg = document.getElementById('save-status-msg');
 const btnBrowseDir = document.getElementById('btn-browse-dir');
 const btnOpenCurrentDir = document.getElementById('btn-open-current-dir');
-const btnOpenDlDir = document.getElementById('btn-open-dl-dir');
 
-// Initialize
+// Toolbar Controls
+const btnAddModal = document.getElementById('btn-add-modal');
+const btnToolbarDelete = document.getElementById('btn-toolbar-delete');
+const btnOpenFolder = document.getElementById('btn-open-folder');
+const btnToolbarSettings = document.getElementById('btn-toolbar-settings');
+const btnSidebarSettings = document.getElementById('btn-sidebar-settings');
+
+// Status Bar
+const activeTasksLabel = document.getElementById('active-tasks-label');
+const statTotalCount = document.getElementById('stat-total-count');
+const globalSpeedEl = document.getElementById('global-speed');
+
+// ==========================================================================
+// Lifecycle Initialization
+// ==========================================================================
 document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   setupTauriListeners();
@@ -61,170 +100,287 @@ document.addEventListener('DOMContentLoaded', () => {
   // Periodic polling fallback
   setInterval(() => {
     loadInitialDownloads();
-  }, 2000);
+  }, 2500);
 });
 
 function setupEventListeners() {
-  // Navigation / Filter buttons
-  document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  // Tree Navigation Filter Clicking
+  document.querySelectorAll('.tree-header, .tree-child').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.tree-header, .tree-child').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      if (btn.dataset.view === 'settings') {
-        showSettingsView();
-      } else {
-        showDownloadsView();
-        state.activeFilter = btn.dataset.filter || 'all';
-        renderTable();
-      }
-    });
-  });
-
-  btnViewDownloads.addEventListener('click', () => {
-    showDownloadsView();
-    const allBtn = document.querySelector('.nav-item[data-filter="all"]');
-    if (allBtn) {
-      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-      allBtn.classList.add('active');
-    }
-  });
-
-  // Modal toggles
-  document.getElementById('btn-add-modal').addEventListener('click', () => openModal());
-  document.getElementById('modal-close-btn').addEventListener('click', () => closeModal());
-  document.getElementById('modal-cancel-btn').addEventListener('click', () => closeModal());
-
-  // Slider in Modal
-  modalPartsSlider.addEventListener('input', (e) => {
-    partsValLabel.textContent = e.target.value;
-  });
-
-  // Slider in Settings
-  settingMaxConnections.addEventListener('input', (e) => {
-    settingThreadsVal.textContent = e.target.value;
-  });
-
-  // Paste clipboard
-  document.getElementById('btn-paste-clipboard').addEventListener('click', async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.startsWith('http')) {
-        modalUrlInput.value = text.trim();
-        triggerProbe(text.trim());
-      }
-    } catch (e) {
-      console.warn('Could not read clipboard', e);
-    }
-  });
-
-  // URL input debounce probe
-  let probeTimer = null;
-  modalUrlInput.addEventListener('input', (e) => {
-    const url = e.target.value.trim();
-    clearTimeout(probeTimer);
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      probeTimer = setTimeout(() => triggerProbe(url), 400);
-    }
-  });
-
-  // Start Download Button in Modal
-  document.getElementById('modal-start-btn').addEventListener('click', async () => {
-    let url = modalUrlInput.value.trim();
-    if (!url) return;
-
-    let filename = modalFilenameInput.value.trim() || undefined;
-    let audioUrl = undefined;
-    if (modalResolvedFormats && modalResolvedFormats.length > 0 && modalFormatSelect) {
-      const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
-      if (chosen && chosen.url) {
-        url = chosen.url;
-        audioUrl = chosen.audio_url || undefined;
-        filename = chosen.filename;
-      }
-    }
-
-    const parts = parseInt(modalPartsSlider.value, 10) || state.settings.max_connections || 8;
-
-    try {
-      if (invoke) {
-        await invoke('start_download', { 
-          url,
-          audioUrl,
-          filename, 
-          parts,
-          outputDir: state.settings.download_dir || undefined 
-        });
-      }
-      closeModal();
+      state.activeFilter = btn.dataset.filter || 'all';
       showDownloadsView();
-    } catch (err) {
-      alert('Failed to start download: ' + err);
-    }
+      renderTable();
+    });
   });
 
-  const btnQuit = document.getElementById('btn-quit-app');
-  if (btnQuit) {
-    btnQuit.addEventListener('click', () => {
-      if (confirm('Are you sure you want to quit Pew Download Manager completely?')) {
-        if (invoke) invoke('exit_app');
-      }
-    });
-  }
+  // Settings view triggers
+  btnToolbarSettings.addEventListener('click', () => showSettingsView());
+  btnSidebarSettings.addEventListener('click', () => showSettingsView());
+  btnBackDownloads.addEventListener('click', () => showDownloadsView());
 
-  // Search
-  document.getElementById('search-input').addEventListener('input', (e) => {
+  // Search input
+  searchInput.addEventListener('input', (e) => {
     state.searchQuery = e.target.value.toLowerCase().trim();
+    searchClearBtn.style.display = state.searchQuery ? 'inline-block' : 'none';
     renderTable();
   });
 
-  // Settings Actions
-  btnBrowseDir.addEventListener('click', async () => {
-    if (invoke) {
-      try {
-        const chosen = await invoke('select_folder');
-        if (chosen) {
-          settingDownloadDir.value = chosen;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
+  searchClearBtn.addEventListener('click', () => {
+    searchInput.value = '';
+    state.searchQuery = '';
+    searchClearBtn.style.display = 'none';
+    renderTable();
   });
 
-  btnOpenCurrentDir.addEventListener('click', () => {
-    const dir = settingDownloadDir.value.trim() || state.settings.download_dir;
-    if (dir && invoke) {
-      invoke('open_in_folder', { path: dir });
+  // Select All Checkbox
+  thSelectAll.addEventListener('change', (e) => {
+    const isChecked = e.target.checked;
+    const filtered = Array.from(state.downloads.values()).filter(matchesFilter);
+    state.selectedIds.clear();
+    if (isChecked) {
+      filtered.forEach(it => state.selectedIds.add(it.id));
     }
+    renderTable();
   });
 
-  btnOpenDlDir.addEventListener('click', () => {
+  // Toolbar Open Folder
+  btnOpenFolder.addEventListener('click', () => {
     const dir = state.settings.download_dir;
     if (dir && invoke) {
       invoke('open_in_folder', { path: dir });
     }
   });
 
-  btnSaveSettings.addEventListener('click', async () => {
-    await savePreferences();
+  // Toolbar Delete Selected
+  btnToolbarDelete.addEventListener('click', async () => {
+    if (state.selectedIds.size === 0) return;
+    if (confirm(`Remove ${state.selectedIds.size} selected download(s) from the list?`)) {
+      for (const id of state.selectedIds) {
+        if (invoke) await invoke('delete_download', { id, deleteFile: false });
+        state.downloads.delete(id);
+      }
+      state.selectedIds.clear();
+      renderTable();
+    }
+  });
+
+  // Modal Open & Close
+  btnAddModal.addEventListener('click', () => openAddModal());
+  document.getElementById('modal-close-btn').addEventListener('click', () => closeAddModal());
+  document.getElementById('modal-cancel-btn').addEventListener('click', () => closeAddModal());
+
+  // Add Modal Sliders & Settings Toggles
+  modalPartsSlider.addEventListener('input', (e) => {
+    partsValLabel.textContent = e.target.value;
+  });
+
+  document.getElementById('btn-toggle-advanced').addEventListener('click', () => {
+    advancedBox.style.display = advancedBox.style.display === 'none' ? 'flex' : 'none';
+  });
+
+  // Paste from clipboard in Add Modal
+  document.getElementById('btn-paste-clipboard').addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim().startsWith('http')) {
+        modalUrlInput.value = text.trim();
+        triggerProbe(text.trim());
+      }
+    } catch (e) {}
+  });
+
+  // Add Modal Browse Directory
+  document.getElementById('btn-modal-browse').addEventListener('click', async () => {
+    if (invoke) {
+      try {
+        const chosen = await invoke('select_folder');
+        if (chosen) {
+          modalSavePath.textContent = chosen;
+          modalSavePath.title = chosen;
+        }
+      } catch (e) {}
+    }
+  });
+
+  // Debounced URL Probe
+  let probeTimer = null;
+  modalUrlInput.addEventListener('input', (e) => {
+    const url = e.target.value.trim();
+    clearTimeout(probeTimer);
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      probeTimer = setTimeout(() => triggerProbe(url), 350);
+    }
+  });
+
+  document.getElementById('btn-reprobe').addEventListener('click', () => {
+    const url = modalUrlInput.value.trim();
+    if (url) triggerProbe(url);
+  });
+
+  // Add Modal Actions (Download & Add)
+  document.getElementById('modal-start-btn').addEventListener('click', () => executeAddDownload(true));
+  document.getElementById('modal-btn-add').addEventListener('click', () => executeAddDownload(false));
+
+  // Detail Modal Actions
+  document.getElementById('detail-close-btn').addEventListener('click', () => closeDetailModal());
+  document.getElementById('btn-detail-close').addEventListener('click', () => closeDetailModal());
+  document.getElementById('btn-detail-folder').addEventListener('click', () => {
+    if (state.detailModalId) {
+      const item = state.downloads.get(state.detailModalId);
+      if (item && item.target_path && invoke) {
+        invoke('open_in_folder', { path: item.target_path });
+      } else if (state.settings.download_dir && invoke) {
+        invoke('open_in_folder', { path: state.settings.download_dir });
+      }
+    }
+  });
+
+  // Settings Page Listeners
+  settingMaxConnections.addEventListener('input', (e) => {
+    settingThreadsVal.textContent = e.target.value;
+  });
+
+  btnBrowseDir.addEventListener('click', async () => {
+    if (invoke) {
+      try {
+        const chosen = await invoke('select_folder');
+        if (chosen) settingDownloadDir.value = chosen;
+      } catch (e) {}
+    }
+  });
+
+  btnOpenCurrentDir.addEventListener('click', () => {
+    const dir = settingDownloadDir.value.trim() || state.settings.download_dir;
+    if (dir && invoke) invoke('open_in_folder', { path: dir });
+  });
+
+  btnSaveSettings.addEventListener('click', () => savePreferences());
+
+  document.getElementById('btn-quit-app').addEventListener('click', () => {
+    if (confirm('Quit Pew Download Manager completely?')) {
+      if (invoke) invoke('exit_app');
+    }
+  });
+
+  // Global Context Menu dismiss
+  document.addEventListener('click', (e) => {
+    if (!contextMenu.contains(e.target)) {
+      contextMenu.style.display = 'none';
+    }
+  });
+
+  // Context Menu Item Handlers
+  document.getElementById('ctx-open-file').addEventListener('click', () => {
+    contextMenu.style.display = 'none';
+    if (contextTargetId) {
+      const item = state.downloads.get(contextTargetId);
+      if (item && item.target_path && invoke) invoke('open_file', { path: item.target_path });
+    }
+  });
+
+  document.getElementById('ctx-open-folder').addEventListener('click', () => {
+    contextMenu.style.display = 'none';
+    if (contextTargetId) {
+      const item = state.downloads.get(contextTargetId);
+      if (item && item.target_path && invoke) invoke('open_in_folder', { path: item.target_path });
+    }
+  });
+
+  document.getElementById('ctx-copy-url').addEventListener('click', () => {
+    contextMenu.style.display = 'none';
+    if (contextTargetId) {
+      const item = state.downloads.get(contextTargetId);
+      if (item && item.url) navigator.clipboard.writeText(item.url);
+    }
+  });
+
+  document.getElementById('ctx-delete').addEventListener('click', async () => {
+    contextMenu.style.display = 'none';
+    if (contextTargetId) {
+      if (invoke) await invoke('delete_download', { id: contextTargetId, deleteFile: false });
+      state.downloads.delete(contextTargetId);
+      state.selectedIds.delete(contextTargetId);
+      renderTable();
+    }
+  });
+
+  // Menubar Option Actions
+  document.getElementById('opt-add-url').addEventListener('click', () => openAddModal());
+  document.getElementById('opt-browse-folder').addEventListener('click', () => {
+    if (state.settings.download_dir && invoke) invoke('open_in_folder', { path: state.settings.download_dir });
+  });
+  document.getElementById('opt-settings').addEventListener('click', () => showSettingsView());
+  document.getElementById('opt-exit').addEventListener('click', () => {
+    if (invoke) invoke('exit_app');
+  });
+  document.getElementById('opt-clear-completed').addEventListener('click', async () => {
+    for (const [id, item] of state.downloads) {
+      if (item.status === 'Completed') {
+        if (invoke) await invoke('delete_download', { id, deleteFile: false });
+        state.downloads.delete(id);
+      }
+    }
+    renderTable();
+  });
+  document.getElementById('opt-about').addEventListener('click', () => {
+    alert('Pew Download Manager v0.1.0\nHigh-Performance Multi-threaded Rust Core\nModeled after AB Download Manager');
+  });
+  document.getElementById('opt-github').addEventListener('click', () => {
+    window.open('https://github.com/Hue-coder/Pew-download-manager', '_blank');
   });
 }
 
+// ==========================================================================
+// View Transitions
+// ==========================================================================
 function showSettingsView() {
   state.currentView = 'settings';
   downloadsView.style.display = 'none';
   settingsView.style.display = 'block';
-  btnViewDownloads.style.display = 'inline-flex';
-  topSearchBox.style.display = 'none';
+  btnBackDownloads.style.display = 'inline-block';
 }
 
 function showDownloadsView() {
   state.currentView = 'downloads';
   settingsView.style.display = 'none';
   downloadsView.style.display = 'block';
-  btnViewDownloads.style.display = 'none';
-  topSearchBox.style.display = 'flex';
+  btnBackDownloads.style.display = 'none';
+}
+
+// ==========================================================================
+// Tauri Events & Data Fetching
+// ==========================================================================
+function setupTauriListeners() {
+  if (!listen) return;
+
+  listen('download-update', (event) => {
+    const item = event.payload;
+    state.downloads.set(item.id, item);
+    updateRow(item);
+    updateCategoryCounts();
+    updateGlobalMetrics();
+
+    // If detail modal is open for this item, update it in real-time
+    if (state.detailModalId === item.id) {
+      updateDetailModal(item);
+    }
+  });
+}
+
+async function loadInitialDownloads() {
+  if (invoke) {
+    try {
+      const items = await invoke('get_downloads');
+      items.forEach(it => state.downloads.set(it.id, it));
+      renderTable();
+    } catch (e) {
+      console.error(e);
+    }
+  }
 }
 
 async function loadInitialSettings() {
@@ -243,16 +399,11 @@ async function loadInitialSettings() {
         settingUa.value = cfg.user_agent || state.settings.user_agent;
 
         if (cfg.download_dir) {
-          const shortPath = cfg.download_dir.length > 25 
-            ? '...' + cfg.download_dir.substring(cfg.download_dir.length - 22)
-            : cfg.download_dir;
-          savePathIndicator.textContent = `📁 ${shortPath}`;
-          savePathIndicator.title = cfg.download_dir;
+          modalSavePath.textContent = cfg.download_dir;
+          modalSavePath.title = cfg.download_dir;
         }
       }
-    } catch (e) {
-      console.warn('Could not load settings:', e);
-    }
+    } catch (e) {}
   }
 }
 
@@ -269,148 +420,46 @@ async function savePreferences() {
     try {
       await invoke('save_settings', { settings: newSettings });
       state.settings = newSettings;
-
-      if (newSettings.download_dir) {
-        const shortPath = newSettings.download_dir.length > 25 
-          ? '...' + newSettings.download_dir.substring(newSettings.download_dir.length - 22)
-          : newSettings.download_dir;
-        savePathIndicator.textContent = `📁 ${shortPath}`;
-        savePathIndicator.title = newSettings.download_dir;
-      }
-
+      modalSavePath.textContent = newSettings.download_dir;
       saveStatusMsg.style.display = 'inline-block';
-      setTimeout(() => {
-        saveStatusMsg.style.display = 'none';
-      }, 2500);
+      setTimeout(() => { saveStatusMsg.style.display = 'none'; }, 2500);
     } catch (e) {
       alert('Failed to save settings: ' + e);
     }
   }
 }
 
-const modalFormatSelect = document.getElementById('modal-format-select');
-const rowFormatSelect = document.getElementById('row-format-select');
-let modalResolvedFormats = [];
-
-function openModal() {
-  addModal.classList.add('active');
-  modalUrlInput.value = '';
-  modalFilenameInput.value = '';
-  modalResolvedFormats = [];
-  if (rowFormatSelect) rowFormatSelect.style.display = 'none';
-  if (modalFormatSelect) modalFormatSelect.innerHTML = '';
-  probeInfo.style.display = 'none';
-  probeLoading.style.display = 'none';
-  modalUrlInput.focus();
-
-  navigator.clipboard.readText().then(text => {
-    if (text && (text.startsWith('http://') || text.startsWith('https://'))) {
-      modalUrlInput.value = text.trim();
-      triggerProbe(text.trim());
-    }
-  }).catch(() => {});
-}
-
-function closeModal() {
-  addModal.classList.remove('active');
-}
-
-async function triggerProbe(url) {
-  probeLoading.style.display = 'flex';
-  probeInfo.style.display = 'none';
-  if (rowFormatSelect) rowFormatSelect.style.display = 'none';
-  modalResolvedFormats = [];
-
-  if (invoke) {
-    try {
-      // 1. Try full multi-format resolution first (for YouTube, Vimeo, social platforms)
-      const resData = await invoke('resolve_url_formats', { url });
-      if (resData && resData.success && Array.isArray(resData.formats) && resData.formats.length > 0) {
-        modalResolvedFormats = resData.formats;
-        if (modalFormatSelect && rowFormatSelect) {
-          modalFormatSelect.innerHTML = '';
-          resData.formats.forEach((f, idx) => {
-            const opt = document.createElement('option');
-            opt.value = idx;
-            const sizeStr = f.size > 0 ? ` (${formatBytes(f.size)})` : '';
-            opt.textContent = `${f.quality} - ${f.format}${sizeStr}`;
-            modalFormatSelect.appendChild(opt);
-          });
-          rowFormatSelect.style.display = 'flex';
-
-          modalFormatSelect.onchange = () => {
-            const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
-            if (chosen) {
-              modalFilenameInput.value = chosen.filename;
-              probeSize.textContent = chosen.size > 0 ? formatBytes(chosen.size) : 'Stream';
-            }
-          };
-        }
-
-        const first = resData.formats[0];
-        modalFilenameInput.value = first.filename;
-        probeSize.textContent = first.size > 0 ? formatBytes(first.size) : 'Available';
-        probeRanges.textContent = 'Supported (Multi-thread)';
-        probeRanges.className = 'val badge-success';
-        probeLoading.style.display = 'none';
-        probeInfo.style.display = 'flex';
-        return;
-      }
-    } catch (e) {}
-
-    // 2. Regular direct URL probe fallback
-    try {
-      const res = await invoke('probe_url', { url });
-      modalFilenameInput.value = res.filename;
-      probeSize.textContent = res.content_length ? formatBytes(res.content_length) : 'Unknown (Stream)';
-      probeRanges.textContent = res.accepts_ranges ? 'Supported (Multi-thread)' : 'Single stream';
-      probeRanges.className = res.accepts_ranges ? 'val badge-success' : 'val';
-      probeLoading.style.display = 'none';
-      probeInfo.style.display = 'flex';
-    } catch (err) {
-      probeLoading.style.display = 'none';
-    }
-  }
-}
-
-function setupTauriListeners() {
-  if (!listen) return;
-
-  listen('download-update', (event) => {
-    const item = event.payload;
-    state.downloads.set(item.id, item);
-    updateRow(item);
-    updateCategoryCounts();
-    updateGlobalMetrics();
-  });
-}
-
-async function loadInitialDownloads() {
-  if (invoke) {
-    try {
-      const items = await invoke('get_downloads');
-      items.forEach(it => state.downloads.set(it.id, it));
-      renderTable();
-    } catch (e) {
-      console.error(e);
-    }
-  }
-}
-
+// ==========================================================================
+// Table Rendering & Row Updates
+// ==========================================================================
 function renderTable() {
   if (state.currentView !== 'downloads') return;
 
   bodyEl.innerHTML = '';
   const filtered = Array.from(state.downloads.values()).filter(matchesFilter);
 
+  // Sorting
+  filtered.sort((a, b) => {
+    let res = 0;
+    if (state.sortField === 'name') res = a.filename.localeCompare(b.filename);
+    else if (state.sortField === 'size') res = (a.total_bytes || 0) - (b.total_bytes || 0);
+    else if (state.sortField === 'status') res = a.status.localeCompare(b.status);
+    else if (state.sortField === 'speed') res = (a.speed_bps || 0) - (b.speed_bps || 0);
+    else res = (b.id || '').localeCompare(a.id || '');
+    return state.sortAsc ? res : -res;
+  });
+
   if (filtered.length === 0) {
     emptyStateEl.style.display = 'flex';
   } else {
     emptyStateEl.style.display = 'none';
-    filtered.reverse().forEach(item => {
+    filtered.forEach(item => {
       bodyEl.appendChild(createRowElement(item));
     });
   }
+
+  // Update selection button state
+  btnToolbarDelete.disabled = state.selectedIds.size === 0;
 
   updateCategoryCounts();
   updateGlobalMetrics();
@@ -422,20 +471,27 @@ function matchesFilter(item) {
   }
 
   const isFinished = item.status === 'Completed' || (item.total_bytes > 0 && item.downloaded_bytes >= item.total_bytes && item.speed_bps === 0);
-  const ext = item.filename.split('.').pop().toLowerCase();
+  const ext = (item.filename || '').split('.').pop().toLowerCase();
+
   switch (state.activeFilter) {
-    case 'downloading':
-      return !isFinished && (item.status === 'Downloading' || item.status === 'Starting' || item.status.includes('...'));
-    case 'completed':
+    case 'finished':
       return isFinished;
+    case 'unfinished':
+      return !isFinished;
     case 'video':
       return ['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'm4v', 'flv'].includes(ext);
-    case 'compressed':
-      return ['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext);
+    case 'music':
+      return ['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus', 'ogg'].includes(ext);
+    case 'image':
+      return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'bmp', 'ico'].includes(ext);
+    case 'apps':
+      return ['exe', 'msi', 'dmg', 'apk', 'appimage', 'deb', 'rpm'].includes(ext);
     case 'document':
-      return ['pdf', 'docx', 'doc', 'xlsx', 'txt', 'epub'].includes(ext);
-    case 'software':
-      return ['exe', 'msi', 'dmg', 'apk', 'appimage'].includes(ext);
+      return ['pdf', 'docx', 'doc', 'xlsx', 'txt', 'epub', 'pptx'].includes(ext);
+    case 'compressed':
+      return ['zip', 'rar', '7z', 'tar', 'gz', 'iso', 'bz2', 'xz'].includes(ext);
+    case 'other':
+      return !['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'mp3', 'wav', 'flac', 'jpg', 'png', 'webp', 'exe', 'msi', 'pdf', 'zip', 'rar', '7z'].includes(ext);
     default:
       return true;
   }
@@ -444,6 +500,8 @@ function matchesFilter(item) {
 function createRowElement(item) {
   const tr = document.createElement('tr');
   tr.id = `row-${item.id}`;
+  if (state.selectedIds.has(item.id)) tr.classList.add('selected');
+
   tr.innerHTML = getRowHtml(item);
   attachRowEvents(tr, item);
   return tr;
@@ -459,6 +517,8 @@ function updateRow(item) {
   } else {
     if (matchesFilter(item)) {
       row.innerHTML = getRowHtml(item);
+      if (state.selectedIds.has(item.id)) row.classList.add('selected');
+      else row.classList.remove('selected');
       attachRowEvents(row, item);
     } else {
       row.remove();
@@ -468,107 +528,178 @@ function updateRow(item) {
 }
 
 function getRowHtml(item) {
+  const isSelected = state.selectedIds.has(item.id);
   const total = item.total_bytes || 0;
   const downloaded = item.downloaded_bytes || 0;
   const isFinished = item.status === 'Completed' || (total > 0 && downloaded >= total && item.speed_bps === 0);
   const pct = isFinished ? 100 : (total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0);
   const icon = getFileIcon(item.filename);
+  const category = getCategoryName(item.filename);
 
-  let statusClass = 'downloading';
-  let statusText = item.status;
+  // Status Presentation matching ABDM
+  let statusText = 'Added';
+  let statusClass = 'status-added';
+  let showProgress = false;
+
   if (isFinished) {
-    statusClass = 'completed';
-    statusText = 'Completed';
+    statusText = 'Finished';
+    statusClass = 'status-finished';
+  } else if (item.status === 'Downloading') {
+    statusText = `${pct}% Downloading`;
+    statusClass = 'status-downloading';
+    showProgress = true;
+  } else if (item.status === 'Starting' || item.status.includes('...')) {
+    statusText = item.status;
+    statusClass = 'status-downloading';
+    showProgress = true;
+  } else if (item.status === 'Paused') {
+    statusText = `${pct}% Paused`;
+    statusClass = 'status-paused';
+    showProgress = true;
   } else if (item.status === 'Error') {
-    statusClass = 'error';
-    statusText = item.error ? `Error` : 'Error';
+    statusText = item.error ? 'Error' : 'Error';
+    statusClass = 'status-error';
   }
 
-  const defaultSaveDir = state.settings.download_dir || 'Downloads';
-  const locationHint = item.target_path || `${defaultSaveDir}\\${item.filename}`;
+  // Size
+  const sizeText = total > 0 ? formatBytes(total) : (downloaded > 0 ? formatBytes(downloaded) : '-');
 
-  const sizeDisplay = total > 0 
-    ? formatBytes(total) 
-    : (downloaded > 0 ? formatBytes(downloaded) : 'Connecting...');
+  // Speed
+  const speedText = (!isFinished && item.speed_bps > 0) ? formatSpeed(item.speed_bps) : '';
 
-  const progressHtml = total > 0
-    ? `<span>${pct}%</span><span>${formatBytes(downloaded)} / ${formatBytes(total)}</span>`
-    : `<span>${item.status}</span><span>${formatBytes(downloaded)}</span>`;
+  // Time Remaining (e.g. "2 m 22 s left")
+  let timeLeftText = '';
+  if (!isFinished && item.speed_bps > 0 && total > downloaded) {
+    const remainingSecs = Math.round((total - downloaded) / item.speed_bps);
+    timeLeftText = formatDuration(remainingSecs) + ' left';
+  }
+
+  // Date Added / Relative
+  const dateText = item.date_added || 'Recently';
 
   return `
-    <td>
-      <div class="file-cell">
-        <span class="file-icon">${icon}</span>
-        <div class="file-info">
-          <span class="file-name" title="${item.filename}">${item.filename}</span>
-          <span class="file-url" title="${item.error || locationHint}">${item.error ? '⚠️ ' + item.error : locationHint}</span>
+    <td class="td-check">
+      <input type="checkbox" class="row-checkbox" ${isSelected ? 'checked' : ''}>
+    </td>
+    <td class="td-name">
+      <div class="cell-file">
+        <span class="file-type-icon">${icon}</span>
+        <div class="file-text-col">
+          <span class="file-name-line" title="${item.filename}">${item.filename}</span>
+          <span class="file-category-line">${category}</span>
         </div>
       </div>
     </td>
-    <td>${sizeDisplay}</td>
-    <td>
-      <div class="progress-wrapper">
-        <div class="progress-info">
-          ${progressHtml}
+    <td class="td-size">${sizeText}</td>
+    <td class="td-status">
+      <div class="cell-status">
+        <div class="status-text-row">
+          <span class="${statusClass}">${statusText}</span>
         </div>
-        <div class="progress-track">
-          <div class="progress-fill" style="width: ${total > 0 ? pct : (downloaded > 0 ? 100 : 0)}%"></div>
-        </div>
-      </div>
-    </td>
-    <td style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--accent-cyan);">
-      ${!isFinished && item.speed_bps > 0 ? formatSpeed(item.speed_bps) : '-'}
-    </td>
-    <td>
-      <span class="status-badge ${statusClass}" title="${item.error || item.status}">${statusText}</span>
-    </td>
-    <td>
-      <div class="action-btn-cell">
-        ${(isFinished || item.status === 'Completed') && item.target_path ? `
-          <button class="icon-action-btn btn-play" title="Open / Play File">▶️</button>
-          <button class="icon-action-btn btn-open" title="Open in File Explorer">📂</button>
+        ${showProgress ? `
+          <div class="slim-progress-track">
+            <div class="slim-progress-fill ${item.status === 'Paused' ? 'paused' : ''}" style="width: ${total > 0 ? pct : 50}%"></div>
+          </div>
         ` : ''}
-        <button class="icon-action-btn btn-del" title="Remove from list">🗑️</button>
       </div>
     </td>
+    <td class="td-speed">${speedText}</td>
+    <td class="td-time">${timeLeftText}</td>
+    <td class="td-date">${dateText}</td>
   `;
 }
 
 function attachRowEvents(row, item) {
-  const playBtn = row.querySelector('.btn-play');
-  if (playBtn && item.target_path) {
-    playBtn.addEventListener('click', () => {
-      if (invoke) invoke('open_file', { path: item.target_path });
-    });
-  }
-
-  const openBtn = row.querySelector('.btn-open');
-  if (openBtn && item.target_path) {
-    openBtn.addEventListener('click', () => {
-      if (invoke) invoke('open_in_folder', { path: item.target_path });
-    });
-  }
-
-  const delBtn = row.querySelector('.btn-del');
-  if (delBtn) {
-    delBtn.addEventListener('click', async () => {
-      if (invoke) {
-        await invoke('delete_download', { id: item.id, deleteFile: false });
+  const checkbox = row.querySelector('.row-checkbox');
+  if (checkbox) {
+    checkbox.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (checkbox.checked) {
+        state.selectedIds.add(item.id);
+        row.classList.add('selected');
+      } else {
+        state.selectedIds.delete(item.id);
+        row.classList.remove('selected');
       }
-      state.downloads.delete(item.id);
-      row.remove();
-      if (bodyEl.children.length === 0) emptyStateEl.style.display = 'flex';
-      updateCategoryCounts();
-      updateGlobalMetrics();
+      btnToolbarDelete.disabled = state.selectedIds.size === 0;
     });
   }
+
+  // Row Click for selection
+  row.addEventListener('click', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.closest('.row-checkbox')) return;
+    if (state.selectedIds.has(item.id)) {
+      state.selectedIds.delete(item.id);
+      row.classList.remove('selected');
+      if (checkbox) checkbox.checked = false;
+    } else {
+      state.selectedIds.add(item.id);
+      row.classList.add('selected');
+      if (checkbox) checkbox.checked = true;
+    }
+    btnToolbarDelete.disabled = state.selectedIds.size === 0;
+  });
+
+  // Double Click opens Download Details Modal
+  row.addEventListener('dblclick', () => {
+    openDetailModal(item.id);
+  });
+
+  // Right Click Context Menu
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    contextTargetId = item.id;
+    contextMenu.style.top = `${Math.min(window.innerHeight - 150, e.clientY)}px`;
+    contextMenu.style.left = `${Math.min(window.innerWidth - 180, e.clientX)}px`;
+    contextMenu.style.display = 'flex';
+  });
 }
 
+// ==========================================================================
+// Category Counts & Metrics
+// ==========================================================================
 function updateCategoryCounts() {
   const items = Array.from(state.downloads.values());
-  document.getElementById('count-all').textContent = items.length;
-  document.getElementById('count-downloading').textContent = items.filter(i => i.status === 'Downloading' || i.status === 'Starting').length;
-  document.getElementById('count-completed').textContent = items.filter(i => i.status === 'Completed').length;
+  const counts = {
+    all: items.length,
+    image: 0,
+    music: 0,
+    video: 0,
+    apps: 0,
+    document: 0,
+    compressed: 0,
+    other: 0,
+    finished: 0,
+    unfinished: 0,
+  };
+
+  items.forEach(it => {
+    const isFinished = it.status === 'Completed' || (it.total_bytes > 0 && it.downloaded_bytes >= it.total_bytes);
+    if (isFinished) counts.finished++;
+    else counts.unfinished++;
+
+    const ext = (it.filename || '').split('.').pop().toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'].includes(ext)) counts.image++;
+    else if (['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus'].includes(ext)) counts.music++;
+    else if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts'].includes(ext)) counts.video++;
+    else if (['exe', 'msi', 'dmg', 'apk'].includes(ext)) counts.apps++;
+    else if (['pdf', 'docx', 'doc', 'xlsx', 'txt'].includes(ext)) counts.document++;
+    else if (['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext)) counts.compressed++;
+    else counts.other++;
+  });
+
+  document.getElementById('count-all').textContent = counts.all;
+  document.getElementById('count-image').textContent = counts.image;
+  document.getElementById('count-music').textContent = counts.music;
+  document.getElementById('count-video').textContent = counts.video;
+  document.getElementById('count-apps').textContent = counts.apps;
+  document.getElementById('count-document').textContent = counts.document;
+  document.getElementById('count-compressed').textContent = counts.compressed;
+  document.getElementById('count-other').textContent = counts.other;
+  document.getElementById('count-finished').textContent = counts.finished;
+  document.getElementById('count-unfinished').textContent = counts.unfinished;
+
+  statTotalCount.textContent = counts.all;
 }
 
 function updateGlobalMetrics() {
@@ -579,16 +710,196 @@ function updateGlobalMetrics() {
   globalSpeedEl.textContent = formatSpeed(totalSpeed);
   activeTasksLabel.textContent = activeDownloads.length > 0 
     ? `${activeDownloads.length} active download(s)` 
-    : 'Engine Ready';
+    : 'Ready';
+}
+
+// ==========================================================================
+// Add Download Modal Logic
+// ==========================================================================
+let modalResolvedFormats = [];
+
+function openAddModal() {
+  addModal.classList.add('active');
+  modalUrlInput.value = '';
+  modalFilenameInput.value = '';
+  modalResolvedFormats = [];
+  rowFormatSelect.style.display = 'none';
+  modalFormatSelect.innerHTML = '';
+  probeSize.textContent = 'Unknown';
+  probeLoading.style.display = 'none';
+  advancedBox.style.display = 'none';
+  modalUrlInput.focus();
+
+  navigator.clipboard.readText().then(text => {
+    if (text && (text.startsWith('http://') || text.startsWith('https://'))) {
+      modalUrlInput.value = text.trim();
+      triggerProbe(text.trim());
+    }
+  }).catch(() => {});
+}
+
+function closeAddModal() {
+  addModal.classList.remove('active');
+}
+
+async function triggerProbe(url) {
+  probeLoading.style.display = 'flex';
+  rowFormatSelect.style.display = 'none';
+  modalResolvedFormats = [];
+
+  if (invoke) {
+    try {
+      // 1. YouTube / Streaming Resolution
+      const resData = await invoke('resolve_url_formats', { url });
+      if (resData && resData.success && Array.isArray(resData.formats) && resData.formats.length > 0) {
+        modalResolvedFormats = resData.formats;
+        modalFormatSelect.innerHTML = '';
+        resData.formats.forEach((f, idx) => {
+          const opt = document.createElement('option');
+          opt.value = idx;
+          const sz = f.size > 0 ? ` (${formatBytes(f.size)})` : '';
+          opt.textContent = `${f.quality} - ${f.format}${sz}`;
+          modalFormatSelect.appendChild(opt);
+        });
+        rowFormatSelect.style.display = 'block';
+
+        modalFormatSelect.onchange = () => {
+          const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
+          if (chosen) {
+            modalFilenameInput.value = chosen.filename;
+            probeSize.textContent = chosen.size > 0 ? formatBytes(chosen.size) : 'Stream';
+          }
+        };
+
+        const first = resData.formats[0];
+        modalFilenameInput.value = first.filename;
+        probeSize.textContent = first.size > 0 ? formatBytes(first.size) : 'Available';
+        probeLoading.style.display = 'none';
+        return;
+      }
+    } catch (e) {}
+
+    // 2. Direct probe fallback
+    try {
+      const res = await invoke('probe_url', { url });
+      modalFilenameInput.value = res.filename;
+      probeSize.textContent = res.content_length ? formatBytes(res.content_length) : 'Unknown';
+      probeLoading.style.display = 'none';
+    } catch (err) {
+      probeLoading.style.display = 'none';
+    }
+  }
+}
+
+async function executeAddDownload(startImmediately) {
+  let url = modalUrlInput.value.trim();
+  if (!url) return;
+
+  let filename = modalFilenameInput.value.trim() || undefined;
+  let audioUrl = undefined;
+  if (modalResolvedFormats && modalResolvedFormats.length > 0 && modalFormatSelect) {
+    const chosen = modalResolvedFormats[parseInt(modalFormatSelect.value, 10)];
+    if (chosen && chosen.url) {
+      url = chosen.url;
+      audioUrl = chosen.audio_url || undefined;
+      filename = chosen.filename;
+    }
+  }
+
+  const parts = parseInt(modalPartsSlider.value, 10) || state.settings.max_connections || 8;
+
+  try {
+    if (invoke) {
+      await invoke('start_download', { 
+        url,
+        audioUrl,
+        filename, 
+        parts,
+        outputDir: state.settings.download_dir || undefined 
+      });
+    }
+    closeAddModal();
+    showDownloadsView();
+  } catch (err) {
+    alert('Failed to start download: ' + err);
+  }
+}
+
+// ==========================================================================
+// Download Detail Modal Logic (Matching ABDM Screenshot 2)
+// ==========================================================================
+function openDetailModal(id) {
+  const item = state.downloads.get(id);
+  if (!item) return;
+
+  state.detailModalId = id;
+  updateDetailModal(item);
+  detailModal.classList.add('active');
+}
+
+function closeDetailModal() {
+  state.detailModalId = null;
+  detailModal.classList.remove('active');
+}
+
+function updateDetailModal(item) {
+  const total = item.total_bytes || 0;
+  const downloaded = item.downloaded_bytes || 0;
+  const isFinished = item.status === 'Completed' || (total > 0 && downloaded >= total && item.speed_bps === 0);
+  const pct = isFinished ? 100 : (total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0);
+
+  detailHeaderTitle.textContent = `${pct}% - ${item.filename}`;
+  detailName.textContent = item.filename;
+  detailStatus.textContent = item.status;
+  detailSize.textContent = total > 0 ? formatBytes(total) : 'Unknown';
+  detailDownloaded.textContent = formatBytes(downloaded);
+  detailSpeed.textContent = item.speed_bps > 0 ? formatSpeed(item.speed_bps) : '-';
+
+  if (!isFinished && item.speed_bps > 0 && total > downloaded) {
+    const secs = Math.round((total - downloaded) / item.speed_bps);
+    detailRemaining.textContent = formatDuration(secs) + ' left';
+  } else {
+    detailRemaining.textContent = isFinished ? 'Completed' : '-';
+  }
+
+  detailProgressBar.style.width = `${total > 0 ? pct : 50}%`;
+
+  // Render multi-part connection block visualizer
+  const partsCount = item.parts || 8;
+  detailPartBlocks.innerHTML = '';
+  for (let i = 0; i < partsCount; i++) {
+    const block = document.createElement('div');
+    block.className = 'part-block';
+    if (isFinished || (pct > ((i / partsCount) * 100))) {
+      block.classList.add('active');
+    } else if (item.status === 'Downloading') {
+      block.classList.add('chunk-mid');
+    }
+    detailPartBlocks.appendChild(block);
+  }
+}
+
+// ==========================================================================
+// Helper Utilities
+// ==========================================================================
+function getCategoryName(filename) {
+  const ext = (filename || '').split('.').pop().toLowerCase();
+  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts'].includes(ext)) return 'Video';
+  if (['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(ext)) return 'Music';
+  if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return 'Image';
+  if (['exe', 'msi', 'dmg', 'apk'].includes(ext)) return 'Apps';
+  if (['pdf', 'docx', 'doc', 'xlsx', 'txt'].includes(ext)) return 'Document';
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext)) return 'Compressed';
+  return 'Other';
 }
 
 function getFileIcon(filename) {
   const ext = (filename || '').split('.').pop().toLowerCase();
   if (['zip', 'rar', '7z', 'tar', 'gz', 'iso'].includes(ext)) return '🗜️';
-  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts', 'm4v'].includes(ext)) return '🎬';
-  if (['mp3', 'wav', 'flac', 'aac', 'm4a', 'opus'].includes(ext)) return '🎵';
-  if (['pdf', 'docx', 'doc', 'txt'].includes(ext)) return '📄';
-  if (['exe', 'msi', 'dmg', 'apk'].includes(ext)) return '💻';
+  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'ts'].includes(ext)) return '🎥';
+  if (['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(ext)) return '🎵';
+  if (['pdf', 'docx', 'doc', 'txt', 'xlsx'].includes(ext)) return '📄';
+  if (['exe', 'msi', 'dmg', 'apk'].includes(ext)) return '📦';
   if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return '🖼️';
   return '📦';
 }
@@ -604,4 +915,15 @@ function formatBytes(bytes) {
 function formatSpeed(bps) {
   if (!bps || bps <= 0) return '0.0 KB/s';
   return formatBytes(bps) + '/s';
+}
+
+function formatDuration(totalSeconds) {
+  if (!totalSeconds || totalSeconds <= 0) return '0 s';
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return `${hours} h ${minutes} m`;
+  if (minutes > 0) return `${minutes} m ${seconds} s`;
+  return `${seconds} s`;
 }

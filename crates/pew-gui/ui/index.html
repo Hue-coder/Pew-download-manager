@@ -7,232 +7,621 @@
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div class="app-container">
-    <!-- Sidebar -->
+  <!-- Custom Integrated ABDM Window Header -->
+  <header class="window-header">
+    <div class="header-left">
+      <div class="app-brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" fill="none" class="brand-svg">
+            <circle cx="12" cy="12" r="10" stroke="url(#brandGrad)" stroke-width="2.2"/>
+            <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="url(#brandGrad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="brandGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#38bdf8"/>
+                <stop offset="0.5" stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#c084fc"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <span class="app-title">Pew Download Manager</span>
+      </div>
+
+      <!-- Menu Items -->
+      <nav class="app-menubar">
+        <div class="menu-item" id="menu-file">
+          <span>File</span>
+          <div class="dropdown-menu">
+            <button class="dropdown-opt" id="opt-add-url">🔗 Add URL...</button>
+            <button class="dropdown-opt" id="opt-browse-folder">📂 Open Download Folder</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-opt" id="opt-settings">⚙️ Settings</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-opt opt-danger" id="opt-exit">🛑 Exit Pew</button>
+          </div>
+        </div>
+        <div class="menu-item" id="menu-tasks">
+          <span>Tasks</span>
+          <div class="dropdown-menu">
+            <button class="dropdown-opt" id="opt-start-all">▶ Start Queue</button>
+            <button class="dropdown-opt" id="opt-stop-all">⏹ Stop All</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-opt" id="opt-clear-completed">🧹 Clear Completed</button>
+          </div>
+        </div>
+        <div class="menu-item" id="menu-tools">
+          <span>Tools</span>
+          <div class="dropdown-menu">
+            <button class="dropdown-opt" id="opt-check-updates">🔄 Check for Updates</button>
+            <button class="dropdown-opt" id="opt-browser-integration">🌐 Browser Integration</button>
+          </div>
+        </div>
+        <div class="menu-item" id="menu-help">
+          <span>Help</span>
+          <div class="dropdown-menu">
+            <button class="dropdown-opt" id="opt-about">ℹ️ About Pew</button>
+            <button class="dropdown-opt" id="opt-github">⭐ Visit GitHub Repository</button>
+          </div>
+        </div>
+      </nav>
+    </div>
+
+    <!-- Search in the List (Pill search) -->
+    <div class="header-right">
+      <div class="search-pill">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="search-input" placeholder="Search in the List" spellcheck="false">
+        <button class="search-clear" id="search-clear-btn" style="display: none;">&times;</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="app-body">
+    <!-- Left Sidebar (ABDM Style Tree Categories) -->
     <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-icon">⚡</div>
-        <div class="brand-text">
-          <h2>PEW</h2>
-          <span>DOWNLOAD MANAGER</span>
+      <div class="sidebar-scroll">
+        <!-- All Section -->
+        <div class="tree-group">
+          <div class="tree-header active" data-filter="all" id="tree-all-header">
+            <span class="tree-arrow">▾</span>
+            <span class="tree-icon">📁</span>
+            <span class="tree-title">All</span>
+            <span class="tree-badge" id="count-all">0</span>
+          </div>
+          
+          <div class="tree-children" id="tree-all-children">
+            <button class="tree-child" data-filter="image">
+              <span class="tree-child-icon">🖼️</span>
+              <span class="tree-child-text">Image</span>
+              <span class="tree-child-badge" id="count-image">0</span>
+            </button>
+            <button class="tree-child" data-filter="music">
+              <span class="tree-child-icon">🎵</span>
+              <span class="tree-child-text">Music</span>
+              <span class="tree-child-badge" id="count-music">0</span>
+            </button>
+            <button class="tree-child" data-filter="video">
+              <span class="tree-child-icon">🎥</span>
+              <span class="tree-child-text">Video</span>
+              <span class="tree-child-badge" id="count-video">0</span>
+            </button>
+            <button class="tree-child" data-filter="apps">
+              <span class="tree-child-icon">📦</span>
+              <span class="tree-child-text">Apps</span>
+              <span class="tree-child-badge" id="count-apps">0</span>
+            </button>
+            <button class="tree-child" data-filter="document">
+              <span class="tree-child-icon">📄</span>
+              <span class="tree-child-text">Document</span>
+              <span class="tree-child-badge" id="count-document">0</span>
+            </button>
+            <button class="tree-child" data-filter="compressed">
+              <span class="tree-child-icon">🗜️</span>
+              <span class="tree-child-text">Compressed</span>
+              <span class="tree-child-badge" id="count-compressed">0</span>
+            </button>
+            <button class="tree-child" data-filter="other">
+              <span class="tree-child-icon">❓</span>
+              <span class="tree-child-text">Other</span>
+              <span class="tree-child-badge" id="count-other">0</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Finished Section -->
+        <div class="tree-group">
+          <div class="tree-header" data-filter="finished" id="tree-finished-header">
+            <span class="tree-arrow">▾</span>
+            <span class="tree-icon">📁</span>
+            <span class="tree-title">Finished</span>
+            <span class="tree-badge" id="count-finished">0</span>
+          </div>
+        </div>
+
+        <!-- Unfinished Section -->
+        <div class="tree-group">
+          <div class="tree-header" data-filter="unfinished" id="tree-unfinished-header">
+            <span class="tree-arrow">▾</span>
+            <span class="tree-icon">📁</span>
+            <span class="tree-title">Unfinished</span>
+            <span class="tree-badge active-pill" id="count-unfinished">0</span>
+          </div>
         </div>
       </div>
 
-      <nav class="nav-menu">
-        <div class="nav-section-title">TASKS</div>
-        <button class="nav-item active" data-filter="all">
-          <span class="icon">📁</span> All Downloads
-          <span class="badge" id="count-all">0</span>
-        </button>
-        <button class="nav-item" data-filter="downloading">
-          <span class="icon">⚡</span> Downloading
-          <span class="badge active-badge" id="count-downloading">0</span>
-        </button>
-        <button class="nav-item" data-filter="completed">
-          <span class="icon">✅</span> Completed
-          <span class="badge" id="count-completed">0</span>
-        </button>
-
-        <div class="nav-section-title">CATEGORIES</div>
-        <button class="nav-item" data-filter="video"><span class="icon">🎬</span> Videos</button>
-        <button class="nav-item" data-filter="compressed"><span class="icon">🗜️</span> Compressed</button>
-        <button class="nav-item" data-filter="document"><span class="icon">📄</span> Documents</button>
-        <button class="nav-item" data-filter="software"><span class="icon">💻</span> Programs</button>
-
-        <div class="nav-section-title">PREFERENCES</div>
-        <button class="nav-item" id="nav-settings-btn" data-view="settings">
-          <span class="icon">⚙️</span> Settings
-        </button>
-      </nav>
-
+      <!-- Sidebar Footer -->
       <div class="sidebar-footer">
-        <div class="stats-box">
-          <div class="stats-label">GLOBAL SPEED</div>
-          <div class="stats-value" id="global-speed">0.0 KB/s</div>
-        </div>
+        <button class="sidebar-footer-btn" id="btn-sidebar-settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="footer-icon">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span>Settings</span>
+        </button>
       </div>
     </aside>
 
-    <!-- Main Content -->
-    <main class="main-content">
-      <!-- Top Action Bar -->
-      <header class="top-bar">
-        <div class="action-buttons">
-          <button class="btn btn-primary" id="btn-add-modal">
-            <span class="btn-icon">+</span> Add Download
+    <!-- Right Content Area -->
+    <main class="main-panel">
+      <!-- ABDM Top Action Toolbar -->
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <!-- Split Add URL Button -->
+          <div class="btn-split-add" id="btn-add-modal">
+            <button class="split-main" title="Add Download Link">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+              </svg>
+              <span>Add URL</span>
+            </button>
+            <button class="split-icon" title="Quick Add from Clipboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg-sm">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+            </button>
+          </div>
+
+          <div class="toolbar-divider"></div>
+
+          <!-- Queue Controls -->
+          <button class="toolbar-btn" id="btn-start-queue" title="Start Queue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span>Start Queue</span>
           </button>
-          <button class="btn btn-secondary" id="btn-view-downloads" style="display: none;">
-            📋 Downloads List
+
+          <button class="toolbar-btn" id="btn-stop-queue" title="Stop Queue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+              <rect x="6" y="6" width="12" height="12"></rect>
+            </svg>
+            <span>Stop Queue</span>
           </button>
-          <button class="btn btn-secondary" id="btn-open-dl-dir" title="Open Download Folder">📂 Open Folder</button>
+
+          <button class="toolbar-btn" id="btn-stop-all" title="Stop All Downloads">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+            </svg>
+            <span>Stop All</span>
+          </button>
+
+          <div class="toolbar-divider"></div>
+
+          <!-- Selection Controls (Active when rows selected) -->
+          <button class="toolbar-btn" id="btn-toolbar-delete" title="Delete Selected Download(s)" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <span>Delete</span>
+          </button>
+
+          <button class="toolbar-btn" id="btn-open-folder" title="Open Download Folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Open Folder</span>
+          </button>
+
+          <button class="toolbar-btn" id="btn-toolbar-settings" title="Application Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tb-svg">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span>Settings</span>
+          </button>
         </div>
 
-        <div class="search-box" id="top-search-box">
-          <span class="search-icon">🔍</span>
-          <input type="text" id="search-input" placeholder="Search downloads...">
-        </div>
-      </header>
-
-      <!-- Downloads Table Container -->
-      <div class="table-container" id="downloads-view">
-        <table class="downloads-table">
-          <thead>
-            <tr>
-              <th style="width: 34%;">File Name</th>
-              <th style="width: 12%;">Size</th>
-              <th style="width: 24%;">Progress</th>
-              <th style="width: 12%;">Speed</th>
-              <th style="width: 10%;">Status</th>
-              <th style="width: 8%; text-align: right;">Action</th>
-            </tr>
-          </thead>
-          <tbody id="downloads-body">
-            <!-- Dynamic rows will be inserted here -->
-          </tbody>
-        </table>
-
-        <!-- Empty State -->
-        <div class="empty-state" id="empty-state">
-          <div class="empty-icon">⚡</div>
-          <h3>No downloads yet</h3>
-          <p>Click "+ Add Download" above, or use the browser extension to grab video streams instantly.</p>
+        <div class="toolbar-right">
+          <button class="btn-back-downloads" id="btn-back-downloads" style="display: none;">
+            ← Back to Downloads
+          </button>
         </div>
       </div>
 
-      <!-- Settings Panel Container -->
-      <div class="settings-container" id="settings-view" style="display: none;">
-        <div class="settings-header">
-          <h2>⚙️ Settings & Storage Preferences</h2>
-          <p>Configure default download locations, multi-part acceleration threads, and browser integration.</p>
+      <!-- Views Container -->
+      <div class="views-wrapper">
+        <!-- 1. Downloads Table View -->
+        <div class="view-panel" id="downloads-view">
+          <div class="table-scroll-container">
+            <table class="ab-table">
+              <thead>
+                <tr>
+                  <th class="th-check"><input type="checkbox" id="th-select-all" title="Select All"></th>
+                  <th class="th-name" data-sort="name"><span class="sort-icon">⇅</span> Name</th>
+                  <th class="th-size" data-sort="size"><span class="sort-icon">⇅</span> Size</th>
+                  <th class="th-status" data-sort="status"><span class="sort-icon">⇅</span> Status</th>
+                  <th class="th-speed" data-sort="speed"><span class="sort-icon">⇅</span> Speed</th>
+                  <th class="th-time" data-sort="time"><span class="sort-icon">⇅</span> Time Left</th>
+                  <th class="th-date" data-sort="date"><span class="sort-icon">⇅</span> Date Added</th>
+                </tr>
+              </thead>
+              <tbody id="downloads-body">
+                <!-- Rows injected via app.js -->
+              </tbody>
+            </table>
+
+            <!-- Empty State -->
+            <div class="empty-state" id="empty-state">
+              <div class="empty-glow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-svg">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+              </div>
+              <h3 class="empty-heading">No downloads in this view</h3>
+              <p class="empty-desc">Click "Add URL" above or grab videos instantly with the browser extension.</p>
+            </div>
+          </div>
         </div>
 
-        <div class="settings-card">
-          <div class="settings-section">
-            <label class="settings-label">Default Download Directory</label>
-            <p class="settings-desc">All downloaded files and video streams will be saved to this folder automatically.</p>
-            <div class="input-with-btn">
-              <input type="text" id="setting-download-dir" class="settings-input" spellcheck="false" placeholder="C:\Users\...\Downloads">
-              <button class="btn btn-primary" id="btn-browse-dir">📂 Browse...</button>
-              <button class="btn btn-secondary" id="btn-open-current-dir" title="Open in File Explorer">↗ Open Folder</button>
+        <!-- 2. Settings View (ABDM Modern Dark Style) -->
+        <div class="view-panel" id="settings-view" style="display: none;">
+          <div class="settings-wrap">
+            <div class="settings-card">
+              <div class="settings-title-row">
+                <h2>Preferences</h2>
+                <p>Configure storage, multi-connection acceleration, and browser integration.</p>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <label>Default Download Directory</label>
+                  <span>All completed files and media streams are moved here.</span>
+                </div>
+                <div class="setting-control path-control">
+                  <input type="text" id="setting-download-dir" class="ab-input" spellcheck="false" placeholder="C:\Users\...\Downloads">
+                  <button class="ab-btn btn-secondary" id="btn-browse-dir">Browse...</button>
+                  <button class="ab-btn btn-secondary" id="btn-open-current-dir">Open</button>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <label>Max Connections / Parts: <strong id="setting-threads-val" class="highlight-val">8</strong></label>
+                  <span>Multi-threaded acceleration for byte-range supported downloads.</span>
+                </div>
+                <div class="setting-control slider-control">
+                  <input type="range" id="setting-max-connections" min="1" max="32" value="8" class="ab-slider">
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <label>Auto-start Downloads</label>
+                  <span>Start downloading immediately when links are sent from browser extension.</span>
+                </div>
+                <div class="setting-control">
+                  <label class="ab-switch">
+                    <input type="checkbox" id="setting-auto-start" checked>
+                    <span class="ab-toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <label>Open Folder Upon Completion</label>
+                  <span>Open Windows Explorer to the downloaded file automatically when finished.</span>
+                </div>
+                <div class="setting-control">
+                  <label class="ab-switch">
+                    <input type="checkbox" id="setting-open-folder">
+                    <span class="ab-toggle-slider"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <label>User-Agent Header</label>
+                  <span>Emulate Chrome browser to prevent restricted stream blockages.</span>
+                </div>
+                <div class="setting-control">
+                  <select id="setting-ua" class="ab-select">
+                    <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36">Google Chrome (Windows 64-bit)</option>
+                    <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0">Mozilla Firefox</option>
+                    <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0">Microsoft Edge</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="settings-bottom-actions">
+                <button class="ab-btn btn-primary" id="btn-save-settings">Save Preferences</button>
+                <span class="save-status-msg" id="save-status-msg" style="display: none;">✓ Preferences saved successfully!</span>
+              </div>
+
+              <div class="setting-danger-zone">
+                <div class="setting-info">
+                  <label style="color: #f43f5e;">Quit Application</label>
+                  <span>Fully terminate Pew Download Manager and its background helper core.</span>
+                </div>
+                <div class="setting-control">
+                  <button class="ab-btn btn-danger" id="btn-quit-app">Quit Pew Completely</button>
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div class="settings-section">
-            <div class="slider-header">
-              <label class="settings-label">Max Connections / Segments Per Task: <strong id="setting-threads-val">8</strong></label>
-            </div>
-            <p class="settings-desc">Accelerates download speeds by requesting multiple byte ranges concurrently (Recommended: 8 - 16).</p>
-            <input type="range" id="setting-max-connections" min="1" max="32" value="8" class="range-slider">
-          </div>
-
-          <div class="settings-section">
-            <label class="settings-label">Automation & Integration</label>
-            <div class="checkbox-group">
-              <label class="checkbox-label">
-                <input type="checkbox" id="setting-auto-start" checked>
-                <span>⚡ Auto-start downloads immediately when intercepted from browser extension</span>
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" id="setting-open-folder">
-                <span>📂 Automatically open folder in Windows Explorer when download finishes</span>
-              </label>
-            </div>
-          </div>
-
-          <div class="settings-section">
-            <label class="settings-label">Network User-Agent</label>
-            <p class="settings-desc">User-Agent header sent to remote servers (helps bypass blocks and restricted video CDNs).</p>
-            <select id="setting-ua" class="settings-select">
-              <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36">Google Chrome (Default Windows 64-bit)</option>
-              <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0">Mozilla Firefox</option>
-              <option value="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0">Microsoft Edge</option>
-            </select>
-          </div>
-
-          <div class="settings-actions">
-            <button class="btn btn-primary btn-save" id="btn-save-settings">💾 Save Preferences</button>
-            <span class="save-status-msg" id="save-status-msg" style="display: none;">✓ Settings saved successfully!</span>
-          </div>
-
-          <div class="settings-section" style="border-top: 1px solid rgba(255,255,255,0.08); margin-top: 1.5rem; padding-top: 1.25rem;">
-            <label class="settings-label" style="color: #f43f5e;">Application Lifecycle</label>
-            <p class="settings-desc">Pew minimizes to background on close to intercept browser downloads. Use this button to fully close the application and background service.</p>
-            <button class="btn btn-secondary" id="btn-quit-app" style="border-color: rgba(244,63,94,0.4); color: #f43f5e;">🛑 Quit Pew Completely</button>
           </div>
         </div>
       </div>
 
-      <!-- Bottom Status Bar -->
+      <!-- ABDM Bottom Status Bar -->
       <footer class="status-bar">
         <div class="status-left">
-          <span class="status-dot"></span>
-          <span id="active-tasks-label">Engine Ready</span>
+          <span class="status-indicator"></span>
+          <span id="active-tasks-label">Ready</span>
         </div>
         <div class="status-right">
-          <span id="save-path-indicator">📁 Downloads</span>
-          <span>•</span>
-          <span>Pew v0.1.0 • Rust Core</span>
+          <div class="status-stat" title="Total Tasks in List">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="status-svg">
+              <line x1="8" y1="6" x2="21" y2="6"></line>
+              <line x1="8" y1="12" x2="21" y2="12"></line>
+              <line x1="8" y1="18" x2="21" y2="18"></line>
+              <line x1="3" y1="6" x2="3.01" y2="6"></line>
+              <line x1="3" y1="12" x2="3.01" y2="12"></line>
+              <line x1="3" y1="18" x2="3.01" y2="18"></line>
+            </svg>
+            <span id="stat-total-count">0</span>
+          </div>
+
+          <div class="status-divider"></div>
+
+          <div class="status-stat" title="Global Download Speed">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="status-svg">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span id="global-speed" class="stat-speed">0.0 KB/s</span>
+          </div>
         </div>
       </footer>
     </main>
   </div>
 
-  <!-- Add Download Modal -->
-  <div class="modal-overlay" id="add-modal">
-    <div class="modal-card">
+  <!-- ============================================== -->
+  <!-- MODAL: ADD DOWNLOAD (EXACT ABDM STYLE)         -->
+  <!-- ============================================== -->
+  <div class="modal-backdrop" id="add-modal">
+    <div class="ab-modal-window">
+      <!-- Modal Titlebar -->
       <div class="modal-header">
-        <h3>⚡ New Download</h3>
-        <button class="modal-close" id="modal-close-btn">&times;</button>
+        <div class="modal-title">
+          <svg viewBox="0 0 24 24" fill="none" class="modal-brand-svg">
+            <circle cx="12" cy="12" r="10" stroke="url(#modalBrandGrad)" stroke-width="2.2"/>
+            <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="url(#modalBrandGrad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="modalBrandGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#38bdf8"/>
+                <stop offset="0.5" stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#c084fc"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span>Add download</span>
+        </div>
+        <button class="modal-close-btn" id="modal-close-btn" title="Close">&times;</button>
       </div>
 
       <div class="modal-body">
-        <div class="form-group">
-          <label>URL</label>
-          <div class="input-with-btn">
-            <input type="text" id="modal-url" placeholder="Paste download URL or YouTube link (https://...)" autofocus spellcheck="false">
-            <button class="btn btn-secondary" id="btn-paste-clipboard">Paste</button>
+        <!-- URL Input with Paste Icon -->
+        <div class="modal-field">
+          <div class="input-with-icon">
+            <input type="text" id="modal-url" placeholder="https://..." autofocus spellcheck="false" class="ab-field-input">
+            <button class="field-icon-btn" id="btn-paste-clipboard" title="Paste from Clipboard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+              </svg>
+            </button>
           </div>
         </div>
 
+        <!-- Save Path & Size preview row -->
+        <div class="modal-row-split">
+          <!-- Folder select -->
+          <div class="folder-select-box" id="btn-modal-browse">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="folder-svg">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span class="folder-path-text" id="modal-save-path">C:\Users\...\Downloads</span>
+            <span class="folder-chevron">▾</span>
+          </div>
+
+          <!-- File Size & Format Badge -->
+          <div class="file-size-badge" id="modal-size-badge">
+            <span class="badge-icon">📦</span>
+            <span class="badge-text" id="probe-size">Unknown</span>
+            <span class="badge-check" id="probe-check">✓</span>
+          </div>
+        </div>
+
+        <!-- Format / Quality Selector (for Multi-resolution YouTube / HLS videos) -->
+        <div class="modal-field" id="row-format-select" style="display: none;">
+          <div class="quality-select-wrapper">
+            <span class="quality-label">Format / Stream:</span>
+            <select id="modal-format-select" class="ab-select quality-select"></select>
+          </div>
+        </div>
+
+        <!-- Filename & Action Buttons Row -->
+        <div class="modal-row-split">
+          <input type="text" id="modal-filename" placeholder="File name" class="ab-field-input filename-input" spellcheck="false">
+          <div class="modal-quick-btns">
+            <button class="quick-btn" id="btn-reprobe" title="Refresh Probe Info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </button>
+            <button class="quick-btn" id="btn-toggle-advanced" title="Connection Settings">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Probing Spinner Banner -->
         <div class="probe-loading" id="probe-loading" style="display: none;">
-          <span class="spinner"></span> Probing stream & server headers...
+          <div class="ab-spinner"></div>
+          <span>Probing remote media streams & headers...</span>
         </div>
 
-        <div class="probe-info" id="probe-info" style="display: none;">
-          <div class="info-row" id="row-format-select" style="display: none;">
-            <span class="label">Quality / Format:</span>
-            <select id="modal-format-select" class="settings-select" style="max-width: 250px; font-size: 0.8rem;"></select>
+        <!-- Collapsible Multi-connection Parts setting -->
+        <div class="advanced-box" id="advanced-box" style="display: none;">
+          <div class="slider-header-modal">
+            <span>Thread Parts (Segments): <strong id="parts-val">8</strong></span>
+            <span class="range-support-badge" id="probe-ranges">Multi-thread Supported</span>
           </div>
-          <div class="info-row">
-            <span class="label">File Name:</span>
-            <input type="text" id="modal-filename" class="inline-input">
-          </div>
-          <div class="info-row">
-            <span class="label">File Size:</span>
-            <span class="val" id="probe-size">Unknown</span>
-          </div>
-          <div class="info-row">
-            <span class="label">Multi-thread:</span>
-            <span class="val badge-success" id="probe-ranges">Supported</span>
-          </div>
-        </div>
-
-        <div class="form-group" style="margin-top: 1rem;">
-          <div class="slider-header">
-            <label>Connections (Parts): <strong id="parts-val">8</strong></label>
-          </div>
-          <input type="range" id="modal-parts" min="1" max="32" value="8" class="range-slider">
+          <input type="range" id="modal-parts" min="1" max="32" value="8" class="ab-slider">
         </div>
       </div>
 
+      <!-- ABDM Bottom Action Buttons -->
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
-        <button class="btn btn-primary" id="modal-start-btn">Start Download</button>
+        <div class="modal-actions-left">
+          <button class="modal-btn btn-secondary" id="modal-btn-add">Add</button>
+          <button class="modal-btn btn-primary" id="modal-start-btn">Download</button>
+        </div>
+        <div class="modal-actions-right">
+          <button class="modal-btn btn-ghost" id="modal-cancel-btn">Cancel</button>
+        </div>
       </div>
     </div>
+  </div>
+
+  <!-- ============================================== -->
+  <!-- MODAL: DOWNLOAD DETAILS / PROGRESS (ABDM STYLE)-->
+  <!-- ============================================== -->
+  <div class="modal-backdrop" id="detail-modal">
+    <div class="ab-modal-window detail-window">
+      <!-- Titlebar with Progress -->
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg viewBox="0 0 24 24" fill="none" class="modal-brand-svg">
+            <circle cx="12" cy="12" r="10" stroke="url(#detailBrandGrad)" stroke-width="2.2"/>
+            <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="url(#detailBrandGrad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="detailBrandGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#38bdf8"/>
+                <stop offset="0.5" stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#c084fc"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span id="detail-header-title">0% - Download</span>
+        </div>
+        <button class="modal-close-btn" id="detail-close-btn" title="Close">&times;</button>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <div class="detail-tabs">
+        <button class="detail-tab active" data-tab="info">ℹ Info</button>
+        <button class="detail-tab" data-tab="settings">⚙ Settings</button>
+      </div>
+
+      <!-- Detail Body -->
+      <div class="detail-body">
+        <div class="detail-grid">
+          <div class="detail-grid-row">
+            <span class="d-label">Name:</span>
+            <span class="d-val d-name" id="detail-name">-</span>
+          </div>
+          <div class="detail-grid-row">
+            <span class="d-label">Status:</span>
+            <span class="d-val d-status" id="detail-status">-</span>
+          </div>
+          <div class="detail-grid-row">
+            <span class="d-label">Size:</span>
+            <span class="d-val" id="detail-size">-</span>
+          </div>
+          <div class="detail-grid-row">
+            <span class="d-label">Downloaded:</span>
+            <span class="d-val" id="detail-downloaded">-</span>
+          </div>
+          <div class="detail-grid-row">
+            <span class="d-label">Speed:</span>
+            <span class="d-val d-speed" id="detail-speed">-</span>
+          </div>
+          <div class="detail-grid-row">
+            <span class="d-label">Remaining Time:</span>
+            <span class="d-val" id="detail-remaining">-</span>
+          </div>
+          <div class="detail-grid-row">
+            <span class="d-label">Resume Support:</span>
+            <span class="d-val resume-yes" id="detail-resume">Yes</span>
+          </div>
+        </div>
+
+        <!-- Large ABDM Gradient Progress Bar -->
+        <div class="detail-progress-wrap">
+          <div class="detail-progress-track">
+            <div class="detail-progress-fill" id="detail-progress-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+
+        <!-- ABDM Part Info Block Visualizer -->
+        <div class="part-info-section">
+          <div class="part-info-header">
+            <span class="part-title">▾ Part Info</span>
+            <div class="part-actions">
+              <button class="ab-btn btn-secondary btn-sm" id="btn-detail-pause">⏸ Pause</button>
+              <button class="ab-btn btn-secondary btn-sm" id="btn-detail-folder">📂 Open Folder</button>
+              <button class="ab-btn btn-secondary btn-sm" id="btn-detail-close">Close</button>
+            </div>
+          </div>
+
+          <!-- Multi-thread Connection Blocks -->
+          <div class="part-blocks-container" id="detail-part-blocks">
+            <!-- 8 or 16 thread blocks dynamically rendered -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Context Menu (Right Click on Rows) -->
+  <div class="context-menu" id="row-context-menu" style="display: none;">
+    <button class="ctx-item" id="ctx-open-file">▶ Play / Open File</button>
+    <button class="ctx-item" id="ctx-open-folder">📂 Open in Folder</button>
+    <button class="ctx-item" id="ctx-copy-url">📋 Copy Download URL</button>
+    <div class="ctx-divider"></div>
+    <button class="ctx-item ctx-danger" id="ctx-delete">🗑 Remove from List</button>
   </div>
 
   <script src="app.js"></script>
