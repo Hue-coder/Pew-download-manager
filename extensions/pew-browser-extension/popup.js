@@ -148,6 +148,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           return;
         }
 
+        const btn = card.querySelector('.btn-dl');
+        if (btn) {
+          btn.textContent = '⏳ Starting Pew...';
+          btn.style.background = '#0284c7';
+        }
+
         chrome.runtime.sendMessage({
           action: 'TRIGGER_PEW_DOWNLOAD',
           url: item.url,
@@ -155,16 +161,25 @@ document.addEventListener('DOMContentLoaded', async () => {
           filename: filename
         }, (res) => {
           if (res && res.task_id) {
+            if (btn) {
+              btn.textContent = '✓ Sent to Pew';
+              btn.style.background = '#10b981';
+              setTimeout(() => {
+                btn.textContent = '⚡ Download with Pew';
+                btn.style.background = '';
+              }, 2500);
+            }
             startProgressModal(res.task_id, filename);
           } else {
-            // Fallback UI indication
-            const btn = card.querySelector('.btn-dl');
-            btn.textContent = '✓ Sent to Pew';
-            btn.style.background = '#10b981';
-            setTimeout(() => {
-              btn.textContent = '⚡ Download with Pew';
-              btn.style.background = '';
-            }, 2500);
+            if (btn) {
+              btn.textContent = '⚠️ Pew Offline';
+              btn.style.background = '#ef4444';
+              setTimeout(() => {
+                btn.textContent = '⚡ Download with Pew';
+                btn.style.background = '';
+              }, 3000);
+            }
+            alert('Pew Download Manager is not running. Please open Pew Download Manager.');
           }
         });
       });

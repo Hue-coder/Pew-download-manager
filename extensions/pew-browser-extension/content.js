@@ -528,6 +528,13 @@
             queryMedia();
             return;
           }
+
+          const dlBtn = itemEl.querySelector('.pew-action-download');
+          if (dlBtn) {
+            dlBtn.textContent = '⏳ Starting Pew...';
+            dlBtn.style.background = '#0284c7';
+          }
+
           safeSendMessage({
             action: 'TRIGGER_PEW_DOWNLOAD',
             url: item.url,
@@ -535,19 +542,27 @@
             filename: cleanName
           }, (res) => {
             if (res && res.task_id) {
+              if (dlBtn) {
+                dlBtn.textContent = '✓ Sent to Pew';
+                dlBtn.style.background = '#10b981';
+                setTimeout(() => {
+                  dlBtn.textContent = '⚡ Download';
+                  dlBtn.style.background = '';
+                }, 2500);
+              }
               showInPageProgressModal(res.task_id, cleanName);
+            } else {
+              if (dlBtn) {
+                dlBtn.textContent = '⚠️ Pew Offline';
+                dlBtn.style.background = '#ef4444';
+                setTimeout(() => {
+                  dlBtn.textContent = '⚡ Download';
+                  dlBtn.style.background = '';
+                }, 3000);
+              }
+              alert('Pew Download Manager is not running. Please open Pew Download Manager from your Start Menu/Desktop.');
             }
           });
-
-          const dlBtn = itemEl.querySelector('.pew-action-download');
-          if (dlBtn) {
-            dlBtn.textContent = '✓ Sent to Pew';
-            dlBtn.style.background = '#10b981';
-            setTimeout(() => {
-              dlBtn.textContent = '⚡ Download';
-              dlBtn.style.background = '';
-            }, 2500);
-          }
         } catch (err) {}
       });
 

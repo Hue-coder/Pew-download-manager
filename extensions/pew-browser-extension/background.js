@@ -228,6 +228,51 @@ function hashStr(str) {
   return Math.abs(h);
 }
 
+// Auto-wake Pew engine if offline and send download request
+async function triggerPewDownloadWithAutoWake(payload) {
+  // 1. First attempt: If Pew is already running
+  try {
+    const res = await fetch('http://127.0.0.1:41738/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(2000)
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    // Pew is offline or starting up
+  }
+
+  // 2. Launch Pew Desktop in background via protocol
+  try {
+    chrome.tabs.create({ url: 'pew://start', active: false }, (tab) => {
+      setTimeout(() => {
+        if (tab && tab.id) chrome.tabs.remove(tab.id).catch(() => {});
+      }, 2000);
+    });
+  } catch (e) {}
+
+  // 3. Retry connecting to Pew every 600ms for up to 5 seconds
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await new Promise(r => setTimeout(r, 600));
+    try {
+      const retryRes = await fetch('http://127.0.0.1:41738/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(2000)
+      });
+      if (retryRes.ok) {
+        return await retryRes.json();
+      }
+    } catch (e) {}
+  }
+
+  throw new Error('PEW_OFFLINE');
+}
+
 // 5. Messaging API
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = (sender.tab && sender.tab.id) || message.tabId;
@@ -248,13 +293,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'SHOW_PEW_APP') {
-    fetch('http://127.0.0.1:41738/show', { method: 'POST', signal: AbortSignal.timeout(2000) })
+    fetch('http://127.0.0.1:41738/show', { method: 'POST', signal: AbortSignal.timeout(1500) })
       .then(() => sendResponse({ success: true }))
       .catch(() => {
         try {
-          chrome.tabs.create({ url: 'pew://show', active: true });
+          chrome.tabs.create({ url: 'pew://show', active: false }, (tab) => {
+            setTimeout(() => {
+              if (tab && tab.id) chrome.tabs.remove(tab.id).catch(() => {});
+            }, 2000);
+          });
         } catch (e) {}
-        sendResponse({ success: false, launchedProtocol: true });
+        sendResponse({ success: true, launchedProtocol: true });
       });
     return true;
   }
@@ -269,24 +318,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'TRIGGER_PEW_DOWNLOAD') {
     const { url, filename, audio_url } = message;
-    fetch('http://127.0.0.1:41738/download', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: url,
-        audio_url: audio_url || undefined,
-        filename: filename,
-        referer: sender.tab ? sender.tab.url : '',
-        user_agent: navigator.userAgent,
-        parts: 8
-      })
-    })
-    .then(r => r.json())
-    .then(data => sendResponse({ success: true, task_id: data.task_id }))
-    .catch(() => {
-      chrome.downloads.download({ url, filename, saveAs: true });
-      sendResponse({ success: true });
-    });
+    const payload = {
+      url: url,
+      audio_url: audio_url || undefined,
+      filename: filename,
+      referer: sender.tab ? sender.tab.url : '',
+      user_agent: navigator.userAgent,
+      parts: 8
+    };
+
+    triggerPewDownloadWithAutoWake(payload)
+      .then(data => sendResponse({ success: true, task_id: data.task_id }))
+      .catch(err => sendResponse({ success: false, error: 'PEW_OFFLINE' }));
 
     return true;
   }

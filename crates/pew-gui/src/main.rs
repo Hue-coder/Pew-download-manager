@@ -1499,6 +1499,19 @@ fn register_pew_protocol() {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    {
+        if std::env::var("WEBVIEW2_USER_DATA_FOLDER").is_err() {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let webview_dir = std::path::PathBuf::from(local_app_data)
+                    .join("PewDownloadManager")
+                    .join("WebView2");
+                let _ = std::fs::create_dir_all(&webview_dir);
+                std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", webview_dir);
+            }
+        }
+    }
+
     if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:41738") {
         use std::io::{Read, Write};
         let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(800)));
@@ -1525,6 +1538,7 @@ fn main() {
 
     let downloads_ref = app_state.downloads.clone();
     let settings_ref = app_state.settings.clone();
+    let tray_settings_ref = app_state.settings.clone();
 
     tauri::Builder::default()
         .manage(app_state)
@@ -1535,9 +1549,68 @@ fn main() {
             }
         })
         .setup(move |app| {
+            // Build system tray icon so Pew remains accessible in notification area
+            let show_i = tauri::menu::MenuItem::with_id(app, "show", "Open Pew Download Manager", true, None::<&str>)?;
+            let folder_i = tauri::menu::MenuItem::with_id(app, "folder", "Open Downloads Folder", true, None::<&str>)?;
+            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Exit Pew", true, None::<&str>)?;
+            let tray_menu = tauri::menu::Menu::with_items(app, &[&show_i, &folder_i, &quit_i])?;
+
+            let tray_settings = tray_settings_ref.clone();
+            let mut tray_builder = tauri::tray::TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .tooltip("Pew Download Manager - Running in Background")
+                .on_menu_event(move |app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.unminimize();
+                                let _ = win.set_focus();
+                            }
+                        }
+                        "folder" => {
+                            let s = tray_settings.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let cfg = s.lock().await;
+                                let _ = open_in_folder(cfg.download_dir.clone());
+                            });
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event {
+                        let app = tray.app_handle();
+                        if let Some(win) = app.get_webview_window("main") {
+                            if win.is_visible().unwrap_or(false) {
+                                let _ = win.hide();
+                            } else {
+                                let _ = win.show();
+                                let _ = win.unminimize();
+                                let _ = win.set_focus();
+                            }
+                        }
+                    }
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+
+            let _tray = tray_builder.build(app)?;
+
             let args: Vec<String> = std::env::args().collect();
-            let is_background = args.iter().any(|a| a == "--minimized" || a == "--background" || a == "-b");
-            if is_background {
+            let is_background = args.iter().any(|a| a == "--minimized" || a == "--background" || a == "-b" || a.contains("pew://start"));
+            let is_explicit_show = args.iter().any(|a| a.contains("pew://show"));
+            if is_background && !is_explicit_show {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.hide();
                 }
