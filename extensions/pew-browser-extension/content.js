@@ -613,10 +613,65 @@
   }
 
   // =========================================================================
-  // Live In-Page Progress Modal Window
+  // Live In-Page Progress Modal Window (Draggable & Moveable Anywhere)
   // =========================================================================
   let activeInPagePoll = null;
   let activeInPageTargetPath = null;
+  let lastProgressPos = null;
+
+  function makeProgressDraggable(container, handle, altHandle) {
+    let isDragging = false;
+    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+    function onMouseDown(e) {
+      if (e.target.closest('button') || e.target.closest('a') || e.target.closest('input')) return;
+
+      isDragging = true;
+      handle.classList.add('pew-is-dragging');
+      startX = e.clientX;
+      startY = e.clientY;
+
+      const rect = container.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      container.style.bottom = 'auto';
+      container.style.right = 'auto';
+      container.style.left = `${startLeft}px`;
+      container.style.top = `${startTop}px`;
+
+      e.preventDefault();
+    }
+
+    handle.addEventListener('mousedown', onMouseDown);
+    if (altHandle) altHandle.addEventListener('mousedown', onMouseDown);
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      const width = container.offsetWidth || 330;
+      const height = container.offsetHeight || 160;
+      const maxLeft = Math.max(10, window.innerWidth - width - 10);
+      const maxTop = Math.max(10, window.innerHeight - height - 10);
+
+      const newLeft = Math.max(10, Math.min(maxLeft, startLeft + dx));
+      const newTop = Math.max(10, Math.min(maxTop, startTop + dy));
+
+      container.style.left = `${newLeft}px`;
+      container.style.top = `${newTop}px`;
+
+      lastProgressPos = { left: newLeft, top: newTop };
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        handle.classList.remove('pew-is-dragging');
+      }
+    });
+  }
 
   function showInPageProgressModal(taskId, filename) {
     if (activeInPagePoll) {
@@ -632,11 +687,24 @@
       document.body.appendChild(progressBox);
     }
 
+    if (lastProgressPos) {
+      progressBox.style.bottom = 'auto';
+      progressBox.style.right = 'auto';
+      progressBox.style.left = `${lastProgressPos.left}px`;
+      progressBox.style.top = `${lastProgressPos.top}px`;
+    } else {
+      progressBox.style.bottom = '24px';
+      progressBox.style.right = '24px';
+      progressBox.style.left = 'auto';
+      progressBox.style.top = 'auto';
+    }
+
     activeInPageTargetPath = null;
     progressBox.innerHTML = `
       <div class="pew-inpage-card">
-        <div class="pew-inpage-header">
+        <div class="pew-inpage-header" title="Drag to move">
           <div class="pew-inpage-title-row">
+            <span class="pew-inpage-drag-handle" title="Drag to move">⋮⋮</span>
             <span class="pew-inpage-bolt">⚡</span>
             <span class="pew-inpage-title" title="${filename}">${filename}</span>
           </div>
@@ -664,6 +732,10 @@
     `;
 
     progressBox.style.display = 'block';
+
+    const headerEl = progressBox.querySelector('.pew-inpage-header');
+    const bodyEl = progressBox.querySelector('.pew-inpage-body');
+    makeProgressDraggable(progressBox, headerEl, bodyEl);
 
     const closeBtn = progressBox.querySelector('#btn-inpage-close');
     const dismissBtn = progressBox.querySelector('#btn-inpage-dismiss');

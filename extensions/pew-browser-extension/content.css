@@ -328,6 +328,26 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  cursor: grab;
+  user-select: none;
+}
+
+.pew-inpage-header:active,
+.pew-inpage-header.pew-is-dragging {
+  cursor: grabbing !important;
+}
+
+.pew-inpage-drag-handle {
+  color: #64748b;
+  font-size: 13px;
+  margin-right: 2px;
+  cursor: grab;
+  user-select: none;
+  letter-spacing: -1px;
+}
+
+.pew-inpage-header:hover .pew-inpage-drag-handle {
+  color: #a78bfa;
 }
 
 .pew-inpage-title-row {
