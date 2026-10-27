@@ -21,9 +21,15 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       return;
     }
 
-    // Strict whitelist: Only intercept archive & installer files (.zip, .rar, .7z, .iso, .exe, .msi)
+    // Comprehensive whitelist: Catch archives, installers, FTP movies, media, and torrent files
     const clean = url.split('?')[0].toLowerCase();
-    const allowedExts = ['.zip', '.rar', '.7z', '.tar', '.gz', '.iso', '.exe', '.msi', '.dmg'];
+    const allowedExts = [
+      '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.iso',
+      '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
+      '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+      '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a',
+      '.torrent', '.pdf', '.bin'
+    ];
     const isAllowed = allowedExts.some(ext => clean.endsWith(ext));
     if (!isAllowed) {
       return;
