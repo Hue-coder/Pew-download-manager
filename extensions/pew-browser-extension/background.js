@@ -282,12 +282,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
     })
     .then(r => r.json())
-    .then(() => sendResponse({ success: true }))
+    .then(data => sendResponse({ success: true, task_id: data.task_id }))
     .catch(() => {
       chrome.downloads.download({ url, filename, saveAs: true });
       sendResponse({ success: true });
     });
 
+    return true;
+  }
+
+  if (message.action === 'POLL_TASK_PROGRESS') {
+    const taskId = message.taskId;
+    fetch(`http://127.0.0.1:41738/task?id=${encodeURIComponent(taskId)}`, { signal: AbortSignal.timeout(3000) })
+      .then(r => r.json())
+      .then(data => sendResponse({ success: true, task: data }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === 'OPEN_DOWNLOAD_FILE') {
+    const path = message.path;
+    fetch(`http://127.0.0.1:41738/open_file?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(3000) })
+      .then(r => r.json())
+      .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === 'OPEN_DOWNLOAD_FOLDER') {
+    const path = message.path;
+    fetch(`http://127.0.0.1:41738/open_folder?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(3000) })
+      .then(r => r.json())
+      .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
 });

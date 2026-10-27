@@ -397,6 +397,195 @@
       color: var(--text-muted);
       line-height: 1.5;
     }
+
+    /* Live Progress Popup Modal */
+    .dl-modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(5px);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      animation: fadeIn 0.15s ease-out;
+    }
+
+    .dl-modal-backdrop.active {
+      display: flex;
+    }
+
+    .dl-modal-box {
+      width: 100%;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+      animation: slideUp 0.18s ease-out;
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(8px) scale(0.97); opacity: 0; }
+      to { transform: translateY(0) scale(1); opacity: 1; }
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .dl-modal-header {
+      padding: 10px 14px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .dl-modal-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .dl-close-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      line-height: 1;
+    }
+
+    .dl-close-btn:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .dl-modal-body {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .dl-item-filename {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f1f5f9;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dl-progress-track {
+      width: 100%;
+      height: 8px;
+      background: #11121c;
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid #232537;
+    }
+
+    .dl-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--grad-brand);
+      border-radius: 4px;
+      box-shadow: 0 0 8px rgba(129, 140, 248, 0.6);
+      transition: width 0.25s ease-out;
+    }
+
+    .dl-progress-fill.completed {
+      background: linear-gradient(135deg, #22c55e, #10b981) !important;
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.7) !important;
+    }
+
+    .dl-progress-fill.error {
+      background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.7) !important;
+    }
+
+    .dl-stats-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11.5px;
+    }
+
+    .dl-stat-status {
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .dl-stat-percent {
+      font-weight: 700;
+      color: #38bdf8;
+      font-family: monospace;
+    }
+
+    .dl-substats {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .dl-modal-footer {
+      padding: 10px 14px;
+      background: #12131d;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      gap: 7px;
+    }
+
+    .btn-action-primary {
+      flex: 1;
+      background: var(--grad-primary);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: var(--shadow-purple);
+      transition: all 0.15s;
+    }
+
+    .btn-action-primary:hover {
+      filter: brightness(1.15);
+    }
+
+    .btn-action-secondary {
+      flex: 1;
+      background: #212334;
+      border: 1px solid var(--border-color);
+      color: #e2e8f0;
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-action-secondary:hover {
+      background: #2b2e44;
+      color: #fff;
+    }
   </style>
 </head>
 <body>
@@ -453,6 +642,43 @@
   </div>
 
   <div class="media-list" id="media-list" style="display: none;"></div>
+
+  <!-- Live Progress Modal Dialog -->
+  <div class="dl-modal-backdrop" id="dl-progress-modal">
+    <div class="dl-modal-box">
+      <div class="dl-modal-header">
+        <div class="dl-modal-title">
+          <svg viewBox="0 0 24 24" fill="none" style="width: 16px; height: 16px;">
+            <circle cx="12" cy="12" r="10" stroke="#38bdf8" stroke-width="2.2"/>
+            <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span id="pop-modal-title">⚡ Pew Real-Time Download</span>
+        </div>
+        <button class="dl-close-btn" id="pop-btn-close-modal" title="Close">&times;</button>
+      </div>
+
+      <div class="dl-modal-body">
+        <div class="dl-item-filename" id="pop-item-filename">Downloading video...</div>
+        <div class="dl-progress-track">
+          <div class="dl-progress-fill" id="pop-progress-bar"></div>
+        </div>
+        <div class="dl-stats-line">
+          <span class="dl-stat-status" id="pop-status-text">Starting download...</span>
+          <span class="dl-stat-percent" id="pop-percent-text">0%</span>
+        </div>
+        <div class="dl-substats">
+          <span id="pop-size-text">0 B / 0 B</span>
+          <span id="pop-speed-text">0 KB/s</span>
+        </div>
+      </div>
+
+      <div class="dl-modal-footer" id="pop-modal-footer" style="display: none;">
+        <button class="btn-action-primary" id="pop-btn-open-file">▶ Open File</button>
+        <button class="btn-action-secondary" id="pop-btn-open-folder">📂 Open Folder</button>
+        <button class="btn-action-secondary" id="pop-btn-close-footer">✕ Close</button>
+      </div>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

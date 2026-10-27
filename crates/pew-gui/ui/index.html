@@ -615,6 +615,75 @@
     </div>
   </div>
 
+  <!-- ============================================== -->
+  <!-- MODAL: BROWSER INTEGRATION (ABDM STYLE)        -->
+  <!-- ============================================== -->
+  <div class="modal-backdrop" id="modal-browser-integration">
+    <div class="ab-modal-window" style="width: 540px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <svg viewBox="0 0 24 24" fill="none" class="modal-brand-svg">
+            <circle cx="12" cy="12" r="10" stroke="url(#intBrandGrad)" stroke-width="2.2"/>
+            <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="url(#intBrandGrad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="intBrandGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#38bdf8"/>
+                <stop offset="0.5" stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#c084fc"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span>Browser Integration</span>
+        </div>
+        <button class="modal-close-btn" id="int-close-btn" title="Close">&times;</button>
+      </div>
+
+      <div class="modal-body" style="padding: 20px 22px; gap: 16px; display: flex; flex-direction: column;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 13.5px; font-weight: 600; color: #fff;">Chrome, Edge & Brave Extension</div>
+          <span style="background: rgba(34,197,94,0.15); color: #22c55e; border: 1px solid rgba(34,197,94,0.3); font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 12px; display: flex; align-items: center; gap: 5px;">
+            <span style="width: 6px; height: 6px; border-radius: 50%; background: #22c55e;"></span> RPC Listening :41738
+          </span>
+        </div>
+
+        <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
+          Integrate Pew with your browser to automatically capture video downloads (4K, 2K, 1080p, MP3) and download files with multi-threaded high speed.
+        </p>
+
+        <!-- Extension Path Box -->
+        <div style="background: #12131d; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 12px 14px;">
+          <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Extension Folder Location</div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="text" id="int-ext-path" readonly value="C:\Users\RAFIQ\Projects\Pew-download-manager\extensions\pew-browser-extension" style="flex: 1; background: #0b0c13; border: 1px solid #232537; border-radius: 6px; padding: 7px 10px; font-size: 11.5px; color: #38bdf8; font-family: monospace;" />
+            <button class="ab-btn btn-secondary btn-sm" id="btn-int-copy-path" style="padding: 7px 12px; font-size: 11.5px;">📋 Copy</button>
+            <button class="ab-btn btn-secondary btn-sm" id="btn-int-open-folder" style="padding: 7px 12px; font-size: 11.5px;">📂 Open</button>
+          </div>
+        </div>
+
+        <!-- 3-Step Setup Guide -->
+        <div style="display: flex; flex-direction: column; gap: 10px; background: rgba(30, 32, 48, 0.4); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 14px;">
+          <div style="font-size: 11.5px; font-weight: 600; color: #e2e8f0; margin-bottom: 2px;">⚡ 3-Step Installation:</div>
+          <div style="display: flex; align-items: flex-start; gap: 10px; font-size: 11.5px; color: var(--text-secondary);">
+            <span style="background: var(--grad-primary); color: #fff; font-weight: 700; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">1</span>
+            <span>Open your browser and navigate to <code style="background: #12131d; padding: 2px 6px; border-radius: 4px; color: #38bdf8; font-family: monospace;">chrome://extensions</code> or <code style="background: #12131d; padding: 2px 6px; border-radius: 4px; color: #38bdf8; font-family: monospace;">edge://extensions</code>.</span>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 10px; font-size: 11.5px; color: var(--text-secondary);">
+            <span style="background: var(--grad-primary); color: #fff; font-weight: 700; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">2</span>
+            <span>Enable <strong>Developer mode</strong> using the toggle switch at the top right of the page.</span>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 10px; font-size: 11.5px; color: var(--text-secondary);">
+            <span style="background: var(--grad-primary); color: #fff; font-weight: 700; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">3</span>
+            <span>Click <strong>Load unpacked</strong> button and select the Pew extension folder above.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="padding: 12px 20px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end;">
+        <button class="ab-btn btn-primary" id="btn-int-done" style="padding: 7px 20px; font-size: 12px;">Done</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Context Menu (Right Click on Rows) -->
   <div class="context-menu" id="row-context-menu" style="display: none;">
     <button class="ctx-item" id="ctx-open-file">▶ Play / Open File</button>

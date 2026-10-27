@@ -107,31 +107,38 @@ impl Downloader {
             return hls_dl.download(&actual_url, &target_path, &event_sender).await;
         }
 
-        // 3. Regular HTTP file probing
-        let info = RemoteFileInfo::probe(&self.client, &actual_url).await?;
+        // 3. Regular HTTP file probing (with graceful fallback if probe is rejected)
+        let info_opt = RemoteFileInfo::probe(&self.client, &actual_url).await.ok();
+        let fallback_fname = actual_url.split('?').next().and_then(|u| u.split('/').last()).unwrap_or("download.bin");
+        let default_fname = info_opt.as_ref().map(|i| i.filename.as_str()).unwrap_or(fallback_fname);
         let filename = custom_filename
             .or(yt_filename.as_deref())
-            .unwrap_or(&info.filename);
+            .unwrap_or(default_fname);
         let target_path = output_dir.join(filename);
 
-        let parts = if info.accepts_ranges && info.content_length.is_some() {
-            self.config.parts.max(1)
+        let (parts, total_bytes) = if let Some(ref info) = info_opt {
+            let p = if info.accepts_ranges && info.content_length.is_some() {
+                self.config.parts.max(1)
+            } else {
+                1
+            };
+            (p, info.content_length)
         } else {
-            1
+            (1, None)
         };
 
         if let Some(ref tx) = event_sender {
             let _ = tx.send(DownloadEvent::Started {
-                total_bytes: info.content_length,
+                total_bytes,
                 parts,
                 filename: filename.to_string(),
             });
         }
 
-        let download_res = if parts > 1 && info.content_length.is_some() {
-            self.download_segmented(&actual_url, &target_path, info.content_length.unwrap(), parts, &event_sender).await
+        let download_res = if parts > 1 && total_bytes.is_some() {
+            self.download_segmented(&actual_url, &target_path, total_bytes.unwrap(), parts, &event_sender).await
         } else {
-            self.download_single(&actual_url, &target_path, info.content_length, filename, &event_sender).await
+            self.download_single(&actual_url, &target_path, total_bytes, filename, &event_sender).await
         };
 
         if let Err(e) = download_res {
@@ -142,7 +149,7 @@ impl Downloader {
         let total = if let Ok(meta) = tokio::fs::metadata(&target_path).await {
             meta.len()
         } else {
-            info.content_length.unwrap_or(0)
+            total_bytes.unwrap_or(0)
         };
 
         if total <= 100 {
@@ -306,6 +313,13 @@ impl Downloader {
             return Err(PewError::HttpStatus(resp.status()));
         }
 
+        let effective_total = total_size.or_else(|| {
+            resp.headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+        });
+
         let mut file = File::create(target_path).await?;
         let mut stream = resp.bytes_stream();
         let mut downloaded = 0u64;
@@ -334,7 +348,7 @@ impl Downloader {
                     let speed_bps = ((downloaded - last_bytes) as f64) / elapsed;
                     let _ = tx.send(DownloadEvent::Progress {
                         downloaded,
-                        total: total_size,
+                        total: effective_total,
                         speed_bps,
                     });
                     last_time = Instant::now();

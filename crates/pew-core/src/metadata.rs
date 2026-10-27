@@ -32,9 +32,12 @@ impl RemoteFileInfo {
         
         // Try HEAD first with browser headers; if failed, fall back to Range 0-0 GET
         let mut head_req = client.head(url)
-            .header("User-Agent", crate::downloader::CHROME_USER_AGENT);
-        if url.contains("googlevideo.com") {
-            head_req = head_req.header("Referer", "https://www.youtube.com/");
+            .header("User-Agent", crate::downloader::CHROME_USER_AGENT)
+            .header("Accept", "*/*");
+        if url.contains("googlevideo.com") || url.contains("youtube.com") {
+            head_req = head_req
+                .header("Referer", "https://www.youtube.com/")
+                .header("Origin", "https://www.youtube.com");
         }
 
         let response = match head_req.send().await {
@@ -42,9 +45,12 @@ impl RemoteFileInfo {
             _ => {
                 let mut get_req = client.get(url)
                     .header("User-Agent", crate::downloader::CHROME_USER_AGENT)
+                    .header("Accept", "*/*")
                     .header("Range", "bytes=0-0");
-                if url.contains("googlevideo.com") {
-                    get_req = get_req.header("Referer", "https://www.youtube.com/");
+                if url.contains("googlevideo.com") || url.contains("youtube.com") {
+                    get_req = get_req
+                        .header("Referer", "https://www.youtube.com/")
+                        .header("Origin", "https://www.youtube.com");
                 }
                 get_req.send().await?
             }
@@ -63,15 +69,16 @@ impl RemoteFileInfo {
             .unwrap_or(false)
             || response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
 
-        let content_length = if let Some(len_header) = headers.get(CONTENT_LENGTH) {
-            len_header.to_str().ok().and_then(|v| v.parse::<u64>().ok())
-        } else if let Some(range_header) = headers.get(reqwest::header::CONTENT_RANGE) {
+        // Content-Range takes precedence over Content-Length for 206 Partial Content responses (e.g. bytes 0-0/TOTAL)
+        let content_length = if let Some(range_header) = headers.get(reqwest::header::CONTENT_RANGE) {
             // E.g. "bytes 0-0/1048576"
             range_header
                 .to_str()
                 .ok()
                 .and_then(|v| v.split('/').last())
                 .and_then(|v| v.parse::<u64>().ok())
+        } else if let Some(len_header) = headers.get(CONTENT_LENGTH) {
+            len_header.to_str().ok().and_then(|v| v.parse::<u64>().ok())
         } else {
             None
         };

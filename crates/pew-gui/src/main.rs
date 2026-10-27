@@ -145,6 +145,7 @@ async fn mux_video_audio(ffmpeg_exe: &Path, vid_path: &Path, aud_path: &Path, ou
                 "-i", &aud_str,
                 "-c:v", "copy",
                 "-c:a", "aac",
+                "-strict", "experimental",
                 "-movflags", "+faststart",
                 &out_str,
             ])
@@ -374,9 +375,13 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
                                     }
                                     if let Some((f_id, _, _)) = classify_format(f) {
                                         if f_id == tier_id {
+                                            let proto = f["protocol"].as_str().unwrap_or("");
+                                            let is_direct_https = proto == "https" || proto == "http";
                                             let tbr = f["tbr"].as_f64().unwrap_or(0.0);
                                             let fps = f["fps"].as_u64().unwrap_or(0) as f64;
-                                            let score = tbr + fps * 10.0;
+                                            // Prioritize direct HTTPS single/parallel streams with solid known size over m3u8 playlists
+                                            let proto_bonus = if is_direct_https { 10000.0 } else { 0.0 };
+                                            let score = proto_bonus + tbr + fps * 10.0;
                                             if best_format.is_none() || score > best_score {
                                                 best_score = score;
                                                 best_format = Some(f);
@@ -1052,6 +1057,38 @@ fn open_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_extension_info() -> Result<serde_json::Value, String> {
+    let mut ext_dir = None;
+    let candidates = [
+        PathBuf::from("extensions").join("pew-browser-extension"),
+        PathBuf::from("..").join("..").join("extensions").join("pew-browser-extension"),
+        PathBuf::from(r"C:\Users\RAFIQ\Projects\Pew-download-manager\extensions\pew-browser-extension"),
+    ];
+    for c in &candidates {
+        if c.exists() && c.is_dir() {
+            if let Ok(canon) = c.canonicalize() {
+                let s = canon.to_string_lossy().to_string();
+                ext_dir = Some(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string());
+                break;
+            }
+        }
+    }
+    let final_path = ext_dir.unwrap_or_else(|| r"C:\Users\RAFIQ\Projects\Pew-download-manager\extensions\pew-browser-extension".to_string());
+    Ok(serde_json::json!({
+        "path": final_path,
+        "rpc_port": 41738,
+        "status": "Ready"
+    }))
+}
+
+#[tauri::command]
+fn open_extension_folder() -> Result<(), String> {
+    let info = get_extension_info()?;
+    let p = info["path"].as_str().unwrap_or("").to_string();
+    open_in_folder(p)
+}
+
+#[tauri::command]
 fn exit_app(app: AppHandle) {
     app.exit(0);
 }
@@ -1222,7 +1259,7 @@ Connection: close\r\n\r\n{}",
                         let parts_to_use = download_parts.unwrap_or(cfg.max_connections);
                         let ua_to_use = download_ua.or(Some(cfg.user_agent));
 
-                        let _ = start_download_internal(
+                        let dl_res = start_download_internal(
                             app,
                             dl_map,
                             url,
@@ -1236,6 +1273,107 @@ Connection: close\r\n\r\n{}",
                             cfg.open_folder_on_finish,
                         ).await;
 
+                        let resp = match dl_res {
+                            Ok(tid) => send_response(&format!("{{\"success\":true,\"task_id\":\"{}\"}}", tid)),
+                            Err(e) => {
+                                let safe_e = e.replace('\\', "\\\\").replace('"', "\\\"");
+                                send_response(&format!("{{\"success\":false,\"error\":\"{}\"}}", safe_e))
+                            }
+                        };
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        let _ = socket.flush().await;
+                        return;
+                    }
+                }
+
+                // Query specific task state for live extension progress popup
+                if first_line.contains("/task") {
+                    let mut task_id = None;
+                    if let Some(query_start) = first_line.find('?') {
+                        let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
+                        for param in query.split('&') {
+                            if let Some((k, v)) = param.split_once('=') {
+                                if k == "id" {
+                                    task_id = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                }
+                            }
+                        }
+                    } else if !body_part.trim().is_empty() {
+                        #[derive(Deserialize)]
+                        struct TaskPayload { id: String }
+                        if let Ok(p) = serde_json::from_str::<TaskPayload>(body_part.trim()) {
+                            task_id = Some(p.id);
+                        }
+                    }
+
+                    if let Some(tid) = task_id {
+                        let map = dl_map.lock().await;
+                        if let Some(item) = map.get(&tid) {
+                            let json_str = serde_json::to_string(item).unwrap_or_else(|_| "{}".into());
+                            let resp = send_response(&json_str);
+                            let _ = socket.write_all(resp.as_bytes()).await;
+                            let _ = socket.flush().await;
+                            return;
+                        } else {
+                            let resp = send_response("{\"status\":\"NotFound\"}");
+                            let _ = socket.write_all(resp.as_bytes()).await;
+                            let _ = socket.flush().await;
+                            return;
+                        }
+                    }
+                }
+
+                // Direct file open command from extension
+                if first_line.contains("/open_file") {
+                    let mut target_path = None;
+                    if let Some(query_start) = first_line.find('?') {
+                        let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
+                        for param in query.split('&') {
+                            if let Some((k, v)) = param.split_once('=') {
+                                if k == "path" {
+                                    target_path = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                }
+                            }
+                        }
+                    } else if !body_part.trim().is_empty() {
+                        #[derive(Deserialize)]
+                        struct OpenPayload { path: String }
+                        if let Ok(p) = serde_json::from_str::<OpenPayload>(body_part.trim()) {
+                            target_path = Some(p.path);
+                        }
+                    }
+
+                    if let Some(p) = target_path {
+                        let _ = open_file(p);
+                        let resp = send_response("{\"success\":true}");
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        let _ = socket.flush().await;
+                        return;
+                    }
+                }
+
+                // Direct folder open command from extension
+                if first_line.contains("/open_folder") {
+                    let mut target_path = None;
+                    if let Some(query_start) = first_line.find('?') {
+                        let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
+                        for param in query.split('&') {
+                            if let Some((k, v)) = param.split_once('=') {
+                                if k == "path" {
+                                    target_path = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                }
+                            }
+                        }
+                    } else if !body_part.trim().is_empty() {
+                        #[derive(Deserialize)]
+                        struct OpenPayload { path: String }
+                        if let Ok(p) = serde_json::from_str::<OpenPayload>(body_part.trim()) {
+                            target_path = Some(p.path);
+                        }
+                    }
+
+                    if let Some(p) = target_path {
+                        let _ = open_in_folder(p);
                         let resp = send_response("{\"success\":true}");
                         let _ = socket.write_all(resp.as_bytes()).await;
                         let _ = socket.flush().await;
@@ -1341,6 +1479,8 @@ fn main() {
             save_settings,
             select_folder,
             resolve_url_formats,
+            get_extension_info,
+            open_extension_folder,
             exit_app
         ])
         .run(tauri::generate_context!())

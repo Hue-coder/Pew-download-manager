@@ -533,16 +533,20 @@
             url: item.url,
             audio_url: item.audio_url || undefined,
             filename: cleanName
+          }, (res) => {
+            if (res && res.task_id) {
+              showInPageProgressModal(res.task_id, cleanName);
+            }
           });
 
           const dlBtn = itemEl.querySelector('.pew-action-download');
           if (dlBtn) {
-            dlBtn.textContent = '✓ Downloading in Pew...';
+            dlBtn.textContent = '✓ Sent to Pew';
             dlBtn.style.background = '#10b981';
             setTimeout(() => {
               dlBtn.textContent = '⚡ Download';
               dlBtn.style.background = '';
-            }, 3000);
+            }, 2500);
           }
         } catch (err) {}
       });
@@ -606,5 +610,148 @@
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  // =========================================================================
+  // Live In-Page Progress Modal Window
+  // =========================================================================
+  let activeInPagePoll = null;
+  let activeInPageTargetPath = null;
+
+  function showInPageProgressModal(taskId, filename) {
+    if (activeInPagePoll) {
+      clearInterval(activeInPagePoll);
+      activeInPagePoll = null;
+    }
+
+    let progressBox = document.getElementById('pew-inpage-progress-modal');
+    if (!progressBox) {
+      progressBox = document.createElement('div');
+      progressBox.id = 'pew-inpage-progress-modal';
+      progressBox.className = 'pew-inpage-modal-wrap';
+      document.body.appendChild(progressBox);
+    }
+
+    activeInPageTargetPath = null;
+    progressBox.innerHTML = `
+      <div class="pew-inpage-card">
+        <div class="pew-inpage-header">
+          <div class="pew-inpage-title-row">
+            <span class="pew-inpage-bolt">⚡</span>
+            <span class="pew-inpage-title" title="${filename}">${filename}</span>
+          </div>
+          <button class="pew-inpage-close" id="btn-inpage-close" title="Close">&times;</button>
+        </div>
+        <div class="pew-inpage-body">
+          <div class="pew-inpage-bar-track">
+            <div class="pew-inpage-bar-fill" id="pew-inpage-bar" style="width: 0%;"></div>
+          </div>
+          <div class="pew-inpage-stats-row">
+            <span class="pew-inpage-status" id="pew-inpage-status">Connecting to Pew Engine...</span>
+            <span class="pew-inpage-percent" id="pew-inpage-percent">0%</span>
+          </div>
+          <div class="pew-inpage-substats">
+            <span id="pew-inpage-size">0 B</span>
+            <span id="pew-inpage-speed">0 KB/s</span>
+          </div>
+        </div>
+        <div class="pew-inpage-footer" id="pew-inpage-footer" style="display: none;">
+          <button class="pew-inpage-btn pew-inpage-btn-primary" id="btn-inpage-open-file">▶ Open File</button>
+          <button class="pew-inpage-btn pew-inpage-btn-secondary" id="btn-inpage-open-folder">📂 Open Folder</button>
+          <button class="pew-inpage-btn pew-inpage-btn-secondary" id="btn-inpage-dismiss">✕ Close</button>
+        </div>
+      </div>
+    `;
+
+    progressBox.style.display = 'block';
+
+    const closeBtn = progressBox.querySelector('#btn-inpage-close');
+    const dismissBtn = progressBox.querySelector('#btn-inpage-dismiss');
+    const openFileBtn = progressBox.querySelector('#btn-inpage-open-file');
+    const openFolderBtn = progressBox.querySelector('#btn-inpage-open-folder');
+
+    const barEl = progressBox.querySelector('#pew-inpage-bar');
+    const statusEl = progressBox.querySelector('#pew-inpage-status');
+    const percentEl = progressBox.querySelector('#pew-inpage-percent');
+    const sizeEl = progressBox.querySelector('#pew-inpage-size');
+    const speedEl = progressBox.querySelector('#pew-inpage-speed');
+    const footerEl = progressBox.querySelector('#pew-inpage-footer');
+
+    function dismissInPage() {
+      if (activeInPagePoll) {
+        clearInterval(activeInPagePoll);
+        activeInPagePoll = null;
+      }
+      progressBox.style.display = 'none';
+    }
+
+    closeBtn.addEventListener('click', dismissInPage);
+    dismissBtn.addEventListener('click', dismissInPage);
+
+    openFileBtn.addEventListener('click', () => {
+      if (activeInPageTargetPath) {
+        safeSendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeInPageTargetPath });
+        openFileBtn.textContent = '✓ Opened';
+        setTimeout(() => openFileBtn.textContent = '▶ Open File', 1500);
+      }
+    });
+
+    openFolderBtn.addEventListener('click', () => {
+      if (activeInPageTargetPath) {
+        safeSendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeInPageTargetPath });
+        openFolderBtn.textContent = '📂 Open Folder';
+        setTimeout(() => openFolderBtn.textContent = '📂 Open Folder', 1500);
+      }
+    });
+
+    activeInPagePoll = setInterval(() => {
+      safeSendMessage({ action: 'POLL_TASK_PROGRESS', taskId }, (res) => {
+        if (!res || !res.success || !res.task) return;
+
+        const task = res.task;
+        if (task.target_path) activeInPageTargetPath = task.target_path;
+
+        const downloaded = task.downloaded_bytes || 0;
+        const total = task.total_bytes || 0;
+        const speed = task.speed_bps || 0;
+
+        let pct = 0;
+        if (total > 0) {
+          pct = Math.min(100, Math.max(0, Math.round((downloaded / total) * 100)));
+        }
+
+        const isComplete = task.status === 'Completed';
+        barEl.style.width = (isComplete ? 100 : pct) + '%';
+        percentEl.textContent = (isComplete ? 100 : pct) + '%';
+        statusEl.textContent = task.status || 'Downloading...';
+
+        if (total > 0) {
+          sizeEl.textContent = `${formatBytes(downloaded)} / ${formatBytes(total)}`;
+        } else if (downloaded > 0) {
+          sizeEl.textContent = formatBytes(downloaded);
+        }
+
+        speedEl.textContent = speed > 0 ? `${formatBytes(speed)}/s` : '';
+
+        if (isComplete) {
+          clearInterval(activeInPagePoll);
+          activeInPagePoll = null;
+          barEl.style.background = 'linear-gradient(135deg, #22c55e, #10b981)';
+          barEl.style.boxShadow = '0 0 10px rgba(34, 197, 94, 0.7)';
+          statusEl.textContent = '✓ Download Complete!';
+          statusEl.style.color = '#22c55e';
+          footerEl.style.display = 'flex';
+        } else if (task.status === 'Error') {
+          clearInterval(activeInPagePoll);
+          activeInPagePoll = null;
+          barEl.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+          statusEl.textContent = `❌ ${task.error || 'Download failed'}`;
+          statusEl.style.color = '#ef4444';
+          footerEl.style.display = 'flex';
+          openFileBtn.style.display = 'none';
+          openFolderBtn.style.display = 'none';
+        }
+      });
+    }, 400);
   }
 })();

@@ -153,17 +153,20 @@ document.addEventListener('DOMContentLoaded', async () => {
           url: item.url,
           audio_url: item.audio_url || undefined,
           filename: filename
+        }, (res) => {
+          if (res && res.task_id) {
+            startProgressModal(res.task_id, filename);
+          } else {
+            // Fallback UI indication
+            const btn = card.querySelector('.btn-dl');
+            btn.textContent = '✓ Sent to Pew';
+            btn.style.background = '#10b981';
+            setTimeout(() => {
+              btn.textContent = '⚡ Download with Pew';
+              btn.style.background = '';
+            }, 2500);
+          }
         });
-
-        const btn = card.querySelector('.btn-dl');
-        btn.textContent = '✓ Downloading in Pew...';
-        btn.style.background = '#10b981';
-        btn.style.color = '#fff';
-        setTimeout(() => {
-          btn.textContent = '⚡ Download with Pew';
-          btn.style.background = '#06b6d4';
-          btn.style.color = '#041017';
-        }, 3000);
       });
 
       card.querySelector('.btn-copy').addEventListener('click', () => {
@@ -175,6 +178,127 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       listEl.appendChild(card);
     });
+  }
+
+  // =========================================================================
+  // Live Download Progress Popup Window Logic
+  // =========================================================================
+  const modalProgress = document.getElementById('dl-progress-modal');
+  const popFilename = document.getElementById('pop-item-filename');
+  const popBar = document.getElementById('pop-progress-bar');
+  const popStatus = document.getElementById('pop-status-text');
+  const popPercent = document.getElementById('pop-percent-text');
+  const popSize = document.getElementById('pop-size-text');
+  const popSpeed = document.getElementById('pop-speed-text');
+  const popFooter = document.getElementById('pop-modal-footer');
+  const btnCloseModal = document.getElementById('pop-btn-close-modal');
+  const btnCloseFooter = document.getElementById('pop-btn-close-footer');
+  const btnOpenFile = document.getElementById('pop-btn-open-file');
+  const btnOpenFolder = document.getElementById('pop-btn-open-folder');
+
+  let activePollInterval = null;
+  let activeTargetPath = null;
+
+  function closeProgressModal() {
+    if (activePollInterval) {
+      clearInterval(activePollInterval);
+      activePollInterval = null;
+    }
+    modalProgress.classList.remove('active');
+  }
+
+  if (btnCloseModal) btnCloseModal.addEventListener('click', closeProgressModal);
+  if (btnCloseFooter) btnCloseFooter.addEventListener('click', closeProgressModal);
+
+  if (btnOpenFile) {
+    btnOpenFile.addEventListener('click', () => {
+      if (activeTargetPath) {
+        chrome.runtime.sendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeTargetPath });
+        btnOpenFile.textContent = '✓ Opened';
+        setTimeout(() => btnOpenFile.textContent = '▶ Open File', 1500);
+      }
+    });
+  }
+
+  if (btnOpenFolder) {
+    btnOpenFolder.addEventListener('click', () => {
+      if (activeTargetPath) {
+        chrome.runtime.sendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeTargetPath });
+        btnOpenFolder.textContent = '✓ Opened';
+        setTimeout(() => btnOpenFolder.textContent = '📂 Open Folder', 1500);
+      }
+    });
+  }
+
+  function startProgressModal(taskId, filename) {
+    if (activePollInterval) {
+      clearInterval(activePollInterval);
+      activePollInterval = null;
+    }
+
+    activeTargetPath = null;
+    popFilename.textContent = filename;
+    popFilename.title = filename;
+    popBar.className = 'dl-progress-fill';
+    popBar.style.width = '0%';
+    popStatus.textContent = 'Connecting to Pew Engine...';
+    popStatus.style.color = 'var(--text-secondary)';
+    popPercent.textContent = '0%';
+    popSize.textContent = '0 B';
+    popSpeed.textContent = '0 KB/s';
+    popFooter.style.display = 'none';
+
+    modalProgress.classList.add('active');
+
+    activePollInterval = setInterval(() => {
+      chrome.runtime.sendMessage({ action: 'POLL_TASK_PROGRESS', taskId }, (res) => {
+        if (!res || !res.success || !res.task) return;
+
+        const task = res.task;
+        if (task.target_path) {
+          activeTargetPath = task.target_path;
+        }
+
+        const downloaded = task.downloaded_bytes || 0;
+        const total = task.total_bytes || 0;
+        const speed = task.speed_bps || 0;
+
+        let pct = 0;
+        if (total > 0) {
+          pct = Math.min(100, Math.max(0, Math.round((downloaded / total) * 100)));
+        }
+
+        popBar.style.width = (task.status === 'Completed' ? 100 : pct) + '%';
+        popPercent.textContent = (task.status === 'Completed' ? 100 : pct) + '%';
+        popStatus.textContent = task.status || 'Downloading...';
+
+        if (total > 0) {
+          popSize.textContent = `${formatBytes(downloaded)} / ${formatBytes(total)}`;
+        } else if (downloaded > 0) {
+          popSize.textContent = formatBytes(downloaded);
+        }
+
+        popSpeed.textContent = speed > 0 ? `${formatBytes(speed)}/s` : (task.status === 'Completed' ? 'Complete' : '');
+
+        if (task.status === 'Completed') {
+          clearInterval(activePollInterval);
+          activePollInterval = null;
+          popBar.classList.add('completed');
+          popStatus.textContent = '✓ Download Finished Successfully';
+          popStatus.style.color = '#22c55e';
+          popFooter.style.display = 'flex';
+        } else if (task.status === 'Error') {
+          clearInterval(activePollInterval);
+          activePollInterval = null;
+          popBar.classList.add('error');
+          popStatus.textContent = `❌ ${task.error || 'Download failed'}`;
+          popStatus.style.color = '#ef4444';
+          popFooter.style.display = 'flex';
+          btnOpenFile.style.display = 'none';
+          btnOpenFolder.style.display = 'none';
+        }
+      });
+    }, 350);
   }
 
   function formatBytes(bytes) {

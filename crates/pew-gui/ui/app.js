@@ -326,12 +326,57 @@ function setupEventListeners() {
     }
     renderTable();
   });
+  document.getElementById('opt-check-updates').addEventListener('click', () => {
+    alert('Pew Download Manager v0.1.0\n\nYou are running the latest version with AB Download Manager UI and high-speed multi-threaded engine!');
+  });
+  document.getElementById('opt-browser-integration').addEventListener('click', () => {
+    openBrowserIntegrationModal();
+  });
   document.getElementById('opt-about').addEventListener('click', () => {
     alert('Pew Download Manager v0.1.0\nHigh-Performance Multi-threaded Rust Core\nModeled after AB Download Manager');
   });
   document.getElementById('opt-github').addEventListener('click', () => {
     window.open('https://github.com/Hue-coder/Pew-download-manager', '_blank');
   });
+
+  // Browser Integration Modal Listeners
+  const modalIntegration = document.getElementById('modal-browser-integration');
+  const btnCloseInt = document.getElementById('int-close-btn');
+  const btnDoneInt = document.getElementById('btn-int-done');
+  const btnCopyIntPath = document.getElementById('btn-int-copy-path');
+  const btnOpenIntFolder = document.getElementById('btn-int-open-folder');
+  const inputIntPath = document.getElementById('int-ext-path');
+
+  async function openBrowserIntegrationModal() {
+    if (invoke) {
+      try {
+        const info = await invoke('get_extension_info');
+        if (info && info.path) {
+          inputIntPath.value = info.path;
+        }
+      } catch (e) {}
+    }
+    modalIntegration.classList.add('active');
+  }
+
+  function closeBrowserIntegrationModal() {
+    modalIntegration.classList.remove('active');
+  }
+
+  if (btnCloseInt) btnCloseInt.addEventListener('click', closeBrowserIntegrationModal);
+  if (btnDoneInt) btnDoneInt.addEventListener('click', closeBrowserIntegrationModal);
+  if (btnCopyIntPath) {
+    btnCopyIntPath.addEventListener('click', () => {
+      navigator.clipboard.writeText(inputIntPath.value);
+      btnCopyIntPath.textContent = '✓ Copied';
+      setTimeout(() => btnCopyIntPath.textContent = '📋 Copy', 1500);
+    });
+  }
+  if (btnOpenIntFolder) {
+    btnOpenIntFolder.addEventListener('click', () => {
+      if (invoke) invoke('open_extension_folder');
+    });
+  }
 }
 
 // ==========================================================================

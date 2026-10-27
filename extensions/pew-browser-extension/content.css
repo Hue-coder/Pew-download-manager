@@ -293,3 +293,166 @@
   background: #2b2e44;
   color: #fff;
 }
+
+/* ==========================================================================
+   In-Page Live Progress Notification Card (ABDM Style)
+   ========================================================================== */
+.pew-inpage-modal-wrap {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+  user-select: none;
+  animation: pewSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pewSlideIn {
+  from { transform: translateY(12px) scale(0.96); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.pew-inpage-card {
+  width: 330px;
+  background: #181926;
+  border: 1px solid #282a3d;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.75), 0 0 15px rgba(124, 58, 237, 0.3);
+  overflow: hidden;
+}
+
+.pew-inpage-header {
+  padding: 9px 12px;
+  background: #12131d;
+  border-bottom: 1px solid #232537;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pew-inpage-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.pew-inpage-bolt {
+  font-size: 13px;
+}
+
+.pew-inpage-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 250px;
+}
+
+.pew-inpage-close {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.pew-inpage-close:hover {
+  color: #fff;
+}
+
+.pew-inpage-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pew-inpage-bar-track {
+  width: 100%;
+  height: 6px;
+  background: #11121c;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid #232537;
+}
+
+.pew-inpage-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+  border-radius: 3px;
+  box-shadow: 0 0 8px rgba(129, 140, 248, 0.6);
+  transition: width 0.25s ease-out;
+}
+
+.pew-inpage-stats-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.pew-inpage-status {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.pew-inpage-percent {
+  font-weight: 700;
+  color: #38bdf8;
+  font-family: monospace;
+}
+
+.pew-inpage-substats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: #64748b;
+  font-family: monospace;
+}
+
+.pew-inpage-footer {
+  padding: 8px 12px;
+  background: #12131d;
+  border-top: 1px solid #232537;
+  display: flex;
+  gap: 6px;
+}
+
+.pew-inpage-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.pew-inpage-btn-primary {
+  background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.35);
+}
+
+.pew-inpage-btn-primary:hover {
+  filter: brightness(1.15);
+}
+
+.pew-inpage-btn-secondary {
+  background: #212334;
+  border: 1px solid #282a3d;
+  color: #cbd5e1;
+}
+
+.pew-inpage-btn-secondary:hover {
+  background: #2b2e44;
+  color: #fff;
+}
