@@ -129,6 +129,11 @@ function notifyTab(tabId, mediaList) {
   } catch (e) {}
 }
 
+function isVideoPlatform(url) {
+  if (!url || !url.startsWith('http')) return false;
+  return /youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com|twitter\.com|x\.com|facebook\.com|instagram\.com|twitch\.tv|pinterest\.com|reddit\.com/i.test(url);
+}
+
 // 3. Tab Lifecycle Monitoring
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading') {
@@ -138,7 +143,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
   const url = (tab && tab.url) || '';
   if (changeInfo.status === 'complete' && url.startsWith('http')) {
-    resolvePageMedia(url, tabId, tab.title);
+    if (isVideoPlatform(url)) {
+      resolvePageMedia(url, tabId, tab.title);
+    }
   }
 });
 

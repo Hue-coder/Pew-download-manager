@@ -9,6 +9,19 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, Mutex};
 use pew_core::{Downloader, DownloadConfig, DownloadEvent, RemoteFileInfo};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+pub fn hidden_cmd<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadItem {
     pub id: String,
@@ -96,12 +109,6 @@ fn save_settings_to_file(settings: &AppSettings) {
 }
 
 fn find_ffmpeg() -> Option<PathBuf> {
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let p = PathBuf::from(appdata).join("PewDownloadManager").join("bin").join("ffmpeg.exe");
-        if p.exists() {
-            return Some(p);
-        }
-    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             let p = parent.join("ffmpeg.exe");
@@ -114,8 +121,18 @@ fn find_ffmpeg() -> Option<PathBuf> {
             }
         }
     }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("PewDownloadManager").join("bin").join("ffmpeg.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
     if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(localappdata)
+        let p = PathBuf::from(&localappdata).join("PewDownloadManager").join("bin").join("ffmpeg.exe");
+        if p.exists() {
+            return Some(p);
+        }
+        let p2 = PathBuf::from(&localappdata)
             .join("Python")
             .join("pythoncore-3.14-64")
             .join("Lib")
@@ -124,11 +141,104 @@ fn find_ffmpeg() -> Option<PathBuf> {
             .join("bin")
             .join("win32")
             .join("ffmpeg.exe");
+        if p2.exists() {
+            return Some(p2);
+        }
+    }
+    if let Ok(o) = hidden_cmd("ffmpeg").arg("-version").output() {
+        if o.status.success() {
+            return Some(PathBuf::from("ffmpeg"));
+        }
+    }
+    None
+}
+
+fn find_ytdlp() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join("yt-dlp.exe");
+            if p.exists() {
+                return Some(p);
+            }
+            let p_bin = parent.join("bin").join("yt-dlp.exe");
+            if p_bin.exists() {
+                return Some(p_bin);
+            }
+        }
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("PewDownloadManager").join("bin").join("yt-dlp.exe");
         if p.exists() {
             return Some(p);
         }
     }
-    Some(PathBuf::from("ffmpeg"))
+    if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+        let p = PathBuf::from(localappdata).join("PewDownloadManager").join("bin").join("yt-dlp.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(o) = hidden_cmd("yt-dlp").arg("--version").output() {
+        if o.status.success() {
+            return Some(PathBuf::from("yt-dlp"));
+        }
+    }
+    None
+}
+
+static YTDLP_DOWNLOAD_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+async fn ensure_ytdlp() -> Option<PathBuf> {
+    if let Some(p) = find_ytdlp() {
+        return Some(p);
+    }
+
+    let py_ok = tokio::task::spawn_blocking(|| {
+        hidden_cmd("python").args(["-m", "yt_dlp", "--version"]).output()
+    }).await.ok();
+    if let Some(Ok(o)) = py_ok {
+        if o.status.success() {
+            return Some(PathBuf::from("__PYTHON_YTDLP__"));
+        }
+    }
+
+    let _guard = YTDLP_DOWNLOAD_LOCK.lock().await;
+    if let Some(p) = find_ytdlp() {
+        return Some(p);
+    }
+
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let bin_dir = PathBuf::from(&appdata).join("PewDownloadManager").join("bin");
+        let target_file = bin_dir.join("yt-dlp.exe");
+        let temp_file = bin_dir.join("yt-dlp.exe.part");
+
+        let _ = tokio::fs::create_dir_all(&bin_dir).await;
+
+        tracing::info!("Downloading standalone yt-dlp.exe from GitHub...");
+        if let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build() {
+            if let Ok(resp) = client
+                .get("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe")
+                .header(reqwest::header::USER_AGENT, "Mozilla/5.0")
+                .send()
+                .await 
+            {
+                if resp.status().is_success() {
+                    if let Ok(bytes) = resp.bytes().await {
+                        if tokio::fs::write(&temp_file, &bytes).await.is_ok() {
+                            let _ = tokio::fs::rename(&temp_file, &target_file).await;
+                            if target_file.exists() {
+                                tracing::info!("yt-dlp.exe successfully downloaded and ready.");
+                                return Some(target_file);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 async fn mux_video_audio(ffmpeg_exe: &Path, vid_path: &Path, aud_path: &Path, out_path: &Path) -> Result<(), String> {
@@ -139,7 +249,7 @@ async fn mux_video_audio(ffmpeg_exe: &Path, vid_path: &Path, aud_path: &Path, ou
 
     tokio::task::spawn_blocking(move || {
         // Attempt 1: Ultra-fast stream copy (-c copy) without re-encoding (< 0.5s for any file size)
-        let fast_status = std::process::Command::new(&ffmpeg_str)
+        let fast_status = hidden_cmd(&ffmpeg_str)
             .args([
                 "-y",
                 "-i", &vid_str,
@@ -160,7 +270,7 @@ async fn mux_video_audio(ffmpeg_exe: &Path, vid_path: &Path, aud_path: &Path, ou
         }
 
         // Attempt 2: If audio codec requires re-encoding to AAC
-        let encode_status = std::process::Command::new(&ffmpeg_str)
+        let encode_status = hidden_cmd(&ffmpeg_str)
             .args([
                 "-y",
                 "-i", &vid_str,
@@ -194,7 +304,7 @@ async fn convert_audio(ffmpeg_exe: &Path, in_path: &Path, out_path: &Path, targe
     let ext = target_ext.to_lowercase();
 
     tokio::task::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new(ffmpeg_str);
+        let mut cmd = hidden_cmd(ffmpeg_str);
         cmd.args(["-y", "-i", &in_str, "-vn"]);
         if ext == "mp3" {
             cmd.args(["-c:a", "libmp3lame", "-q:a", "2"]);
@@ -231,7 +341,7 @@ async fn download_hls_ffmpeg(
     let ext = target_path.extension().and_then(|s| s.to_str()).unwrap_or("mp4").to_lowercase();
 
     tokio::task::spawn_blocking(move || {
-        let mut cmd = std::process::Command::new(ffmpeg_str);
+        let mut cmd = hidden_cmd(ffmpeg_str);
         cmd.args(["-y", "-user_agent", &ua_owned]);
         if let Some(r) = ref_owned {
             cmd.args(["-headers", &format!("Referer: {}\r\n", r)]);
@@ -317,18 +427,46 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
         }
     }
 
+    let ytdlp_bin = ensure_ytdlp().await;
     let url_owned = clean_url.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let output = std::process::Command::new("python")
-            .args([
-                "-m", "yt_dlp",
-                "-J",
-                "--no-warnings",
-                "--no-playlist",
-                "--socket-timeout", "8",
-                &url_owned,
-            ])
-            .output();
+        let output = match ytdlp_bin {
+            Some(ref path) if path.to_string_lossy() == "__PYTHON_YTDLP__" => {
+                hidden_cmd("python")
+                    .args([
+                        "-m", "yt_dlp",
+                        "-J",
+                        "--no-warnings",
+                        "--no-playlist",
+                        "--socket-timeout", "12",
+                        &url_owned,
+                    ])
+                    .output()
+            }
+            Some(ref path) => {
+                hidden_cmd(path)
+                    .args([
+                        "-J",
+                        "--no-warnings",
+                        "--no-playlist",
+                        "--socket-timeout", "12",
+                        &url_owned,
+                    ])
+                    .output()
+            }
+            None => {
+                hidden_cmd("python")
+                    .args([
+                        "-m", "yt_dlp",
+                        "-J",
+                        "--no-warnings",
+                        "--no-playlist",
+                        "--socket-timeout", "12",
+                        &url_owned,
+                    ])
+                    .output()
+            }
+        };
 
         if let Ok(o) = output {
             if o.status.success() {
@@ -559,7 +697,7 @@ async fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Res
 #[tauri::command]
 async fn select_folder() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(|| {
-        let output = std::process::Command::new("powershell")
+        let output = hidden_cmd("powershell")
             .args(["-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Default Download Folder'; if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }"])
             .output();
         match output {
@@ -1077,29 +1215,29 @@ fn open_in_folder(path: String) -> Result<(), String> {
 
         if p.is_file() {
             // Must use raw_arg so Windows explorer receives: explorer.exe /select,"<clean_path>"
-            std::process::Command::new("explorer")
+            hidden_cmd("explorer")
                 .raw_arg(format!("/select,\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         } else if p.is_dir() {
-            std::process::Command::new("explorer")
+            hidden_cmd("explorer")
                 .raw_arg(format!("\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         } else if let Some(parent) = p.parent() {
             if parent.exists() {
-                std::process::Command::new("explorer")
+                hidden_cmd("explorer")
                     .raw_arg(format!("\"{}\"", parent.to_string_lossy()))
                     .spawn()
                     .map_err(|e| e.to_string())?;
             } else {
-                std::process::Command::new("explorer")
+                hidden_cmd("explorer")
                     .raw_arg(format!("\"{}\"", clean_path))
                     .spawn()
                     .map_err(|e| e.to_string())?;
             }
         } else {
-            std::process::Command::new("explorer")
+            hidden_cmd("explorer")
                 .raw_arg(format!("\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
@@ -1116,7 +1254,7 @@ fn open_file(path: String) -> Result<(), String> {
         let clean_path = clean_str.strip_prefix(r"\\?\").unwrap_or(&clean_str).trim();
         // Passing the file path to explorer.exe invokes the Windows default associated app
         // without CMD.EXE code page corruptions on Unicode/Bengali characters!
-        std::process::Command::new("explorer")
+        hidden_cmd("explorer")
             .arg(clean_path)
             .spawn()
             .map_err(|e| e.to_string())?;
@@ -1181,9 +1319,17 @@ fn start_local_rpc_server(
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
-        let listener = match TcpListener::bind("127.0.0.1:41738").await {
-            Ok(l) => l,
-            Err(_) => return,
+        let mut bound_listener = None;
+        for _ in 0..15 {
+            if let Ok(l) = TcpListener::bind("127.0.0.1:41738").await {
+                bound_listener = Some(l);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        let listener = match bound_listener {
+            Some(l) => l,
+            None => return,
         };
 
         while let Ok((mut socket, _)) = listener.accept().await {
@@ -1511,21 +1657,20 @@ Connection: close\r\n\r\n{}",
 fn register_pew_protocol() {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
         if let Ok(exe_path) = std::env::current_exe() {
             let exe_str = exe_path.to_string_lossy().to_string();
-            let _ = Command::new("reg")
+            let _ = hidden_cmd("reg")
                 .args(["add", r"HKCU\Software\Classes\pew", "/ve", "/d", "URL:Pew Protocol", "/f"])
                 .output();
-            let _ = Command::new("reg")
+            let _ = hidden_cmd("reg")
                 .args(["add", r"HKCU\Software\Classes\pew", "/v", "URL Protocol", "/d", "", "/f"])
                 .output();
-            let _ = Command::new("reg")
+            let _ = hidden_cmd("reg")
                 .args(["add", r"HKCU\Software\Classes\pew\shell\open\command", "/ve", "/d", &format!("\"{}\" \"%1\"", exe_str), "/f"])
                 .output();
 
             // Auto-start with Windows so Pew background server is always active on PC boot
-            let _ = Command::new("reg")
+            let _ = hidden_cmd("reg")
                 .args([
                     "add",
                     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -1541,7 +1686,7 @@ fn register_pew_protocol() {
                 let desktop_lnk = std::path::PathBuf::from(&user_profile).join("Desktop").join("Pew Download Manager.lnk");
                 let work_dir = exe_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".to_string());
                 if !desktop_lnk.exists() {
-                    let _ = Command::new("powershell")
+                    let _ = hidden_cmd("powershell")
                         .args([
                             "-NoProfile",
                             "-Command",
@@ -1558,7 +1703,7 @@ fn register_pew_protocol() {
                 if let Ok(appdata) = std::env::var("APPDATA") {
                     let start_lnk = std::path::PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs").join("Pew Download Manager.lnk");
                     if !start_lnk.exists() {
-                        let _ = Command::new("powershell")
+                        let _ = hidden_cmd("powershell")
                             .args([
                                 "-NoProfile",
                                 "-Command",
@@ -1694,6 +1839,9 @@ fn main() {
                     let _ = win.hide();
                 }
             }
+            tauri::async_runtime::spawn(async {
+                let _ = ensure_ytdlp().await;
+            });
             start_local_rpc_server(app.handle().clone(), downloads_ref, settings_ref);
             Ok(())
         })

@@ -27,6 +27,12 @@ jobs:
         with:
           node-version: 20
 
+      - name: Fetch Standalone Media Tools
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "crates/pew-gui/bin"
+          Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "crates/pew-gui/bin/yt-dlp.exe"
+
       - name: Build Tauri Installers and Release Binary
         shell: pwsh
         run: |
@@ -38,9 +44,12 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "release_artifacts"
           Copy-Item "target/release/pew-gui.exe" -Destination "release_artifacts/pew-gui.exe"
+          if (Test-Path "crates/pew-gui/bin") {
+            Copy-Item "crates/pew-gui/bin" -Destination "release_artifacts" -Recurse -Force
+          }
           
           # Compress standalone desktop app into ZIP
-          Compress-Archive -Path "release_artifacts/pew-gui.exe" -DestinationPath "Pew-Download-Manager-Windows-x64.zip" -Force
+          Compress-Archive -Path "release_artifacts/*" -DestinationPath "Pew-Download-Manager-Windows-x64.zip" -Force
           
           # Compress browser extension into clean installable ZIP
           Compress-Archive -Path "extensions/pew-browser-extension/*" -DestinationPath "pew-browser-extension.zip" -Force

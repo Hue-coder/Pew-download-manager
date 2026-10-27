@@ -13,6 +13,15 @@ New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 # 2. Stop running instance if any
 Stop-Process -Name "pew-gui" -Force -ErrorAction SilentlyContinue
 
+# Ensure bin directory has standalone tools
+$guiBinDir = Join-Path $guiDir "bin"
+New-Item -ItemType Directory -Force -Path $guiBinDir | Out-Null
+$ytdlpBin = Join-Path $guiBinDir "yt-dlp.exe"
+if (-not (Test-Path $ytdlpBin)) {
+    Write-Host "Downloading latest standalone yt-dlp.exe..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile $ytdlpBin
+}
+
 # 3. Build Tauri installers (.exe and .msi)
 Write-Host "`n[1/3] Building Windows Desktop Installers (Tauri)..." -ForegroundColor Yellow
 Push-Location $guiDir
@@ -32,7 +41,17 @@ if (Test-Path $msiSource) {
     Copy-Item $msiSource -Destination $distDir -Force
 }
 if (Test-Path $portableExe) {
-    Compress-Archive -Path $portableExe -DestinationPath (Join-Path $distDir "Pew-Download-Manager-Windows-x64.zip") -Force
+    $stageDir = Join-Path $distDir "portable_stage"
+    if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+    Copy-Item $portableExe -Destination $stageDir
+    if (Test-Path $guiBinDir) {
+        Copy-Item $guiBinDir -Destination $stageDir -Recurse -Force
+    }
+    $portableZip = Join-Path $distDir "Pew-Download-Manager-Windows-x64.zip"
+    if (Test-Path $portableZip) { Remove-Item $portableZip -Force }
+    Compress-Archive -Path "$stageDir\*" -DestinationPath $portableZip -Force
+    Remove-Item $stageDir -Recurse -Force
 }
 
 # 5. Package Browser Extension into ZIP
