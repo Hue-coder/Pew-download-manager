@@ -111,15 +111,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       const sizeText = item.size > 0 ? formatBytes(item.size) : '';
 
       // Quality badge style
-      let badgeStyle = 'background: #06b6d4; color: #041017;';
+      let badgeStyle = 'background: #7c3aed; color: #fff; font-weight: 600;';
       if (quality.includes('4K') || quality.includes('2160')) {
         badgeStyle = 'background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; font-weight: bold;';
       } else if (quality.includes('2K') || quality.includes('1440')) {
         badgeStyle = 'background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: #fff; font-weight: bold;';
       } else if (quality.includes('1080')) {
-        badgeStyle = 'background: #0284c7; color: #fff; font-weight: bold;';
+        badgeStyle = 'background: #3b82f6; color: #fff; font-weight: bold;';
       } else if (quality.includes('720')) {
-        badgeStyle = 'background: #10b981; color: #fff;';
+        badgeStyle = 'background: #22c55e; color: #fff;';
       } else if (quality.includes('MP3')) {
         badgeStyle = 'background: #ec4899; color: #fff; font-weight: bold;';
       } else if (quality.includes('WAV')) {

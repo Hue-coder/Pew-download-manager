@@ -362,13 +362,38 @@
     panelContainer.id = 'pew-floating-widget';
     panelContainer.innerHTML = `
       <div class="pew-pill-btn" title="Download video with Pew">
-        <span class="pew-icon">⚡</span>
+        <span class="pew-icon">
+          <svg viewBox="0 0 24 24" fill="none" style="width:14px;height:14px;">
+            <circle cx="12" cy="12" r="10" stroke="url(#pillGrad)" stroke-width="2.2"/>
+            <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="url(#pillGrad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <defs>
+              <linearGradient id="pillGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#38bdf8"/>
+                <stop offset="0.5" stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#c084fc"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
         <span class="pew-label">Download</span>
         <span class="pew-badge">${mediaList.length}</span>
       </div>
       <div class="pew-dropdown" style="display: none;">
         <div class="pew-dropdown-header">
-          <span>⚡ Pew Grabber (${mediaList.length})</span>
+          <div class="pew-header-left">
+            <svg viewBox="0 0 24 24" fill="none" style="width:16px;height:16px;">
+              <circle cx="12" cy="12" r="10" stroke="url(#dropGrad)" stroke-width="2.2"/>
+              <path d="M12 7V15M12 15L8.5 11.5M12 15L15.5 11.5M8 17H16" stroke="url(#dropGrad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+              <defs>
+                <linearGradient id="dropGrad" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#38bdf8"/>
+                  <stop offset="0.5" stop-color="#818cf8"/>
+                  <stop offset="1" stop-color="#c084fc"/>
+                </linearGradient>
+              </defs>
+            </svg>
+            <span>Pew Grabber (${mediaList.length})</span>
+          </div>
           <div style="display:flex; gap:6px; align-items:center;">
             <button class="pew-open-app-btn" title="Open Desktop App">🖥️ Pew App</button>
             <button class="pew-close-btn">&times;</button>
@@ -464,15 +489,15 @@
       const sizeText = item.size > 0 ? formatBytes(item.size) : '';
 
       // Distinct badge color
-      let badgeStyle = 'background: #06b6d4; color: #041017;';
+      let badgeStyle = 'background: #7c3aed; color: #fff; font-weight: 600;';
       if (quality.includes('4K') || quality.includes('2160')) {
         badgeStyle = 'background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; font-weight: bold;';
       } else if (quality.includes('2K') || quality.includes('1440')) {
         badgeStyle = 'background: linear-gradient(135deg, #8b5cf6, #7c3aed); color: #fff; font-weight: bold;';
       } else if (quality.includes('1080')) {
-        badgeStyle = 'background: #0284c7; color: #fff; font-weight: bold;';
+        badgeStyle = 'background: #3b82f6; color: #fff; font-weight: bold;';
       } else if (quality.includes('720')) {
-        badgeStyle = 'background: #10b981; color: #fff;';
+        badgeStyle = 'background: #22c55e; color: #fff;';
       } else if (quality.includes('MP3')) {
         badgeStyle = 'background: #ec4899; color: #fff; font-weight: bold;';
       } else if (quality.includes('WAV')) {
