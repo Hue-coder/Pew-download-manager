@@ -560,7 +560,7 @@
                   dlBtn.style.background = '';
                 }, 3000);
               }
-              alert('Pew Download Manager is not running. Please open Pew Download Manager from your Start Menu/Desktop.');
+              showPewToast('⚠️ Pew Download Manager is offline. Please open Pew from your Desktop shortcut.', true);
             }
           });
         } catch (err) {}
@@ -617,6 +617,39 @@
     document.addEventListener('mouseup', () => {
       isDragging = false;
     });
+  }
+
+  // Sleek floating toast notice (Non-blocking)
+  function showPewToast(msg, isError = false) {
+    let toast = document.getElementById('pew-toast-notice');
+    if (toast) toast.remove();
+    toast = document.createElement('div');
+    toast.id = 'pew-toast-notice';
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #181926;
+      color: #fff;
+      border: 1px solid ${isError ? '#ef4444' : '#6366f1'};
+      padding: 11px 18px;
+      border-radius: 9px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8), 0 0 14px ${isError ? 'rgba(239,68,68,0.4)' : 'rgba(99,102,241,0.4)'};
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      user-select: none;
+    `;
+    toast.innerHTML = `<span>${msg}</span><span style="opacity:0.6; font-size:12px; font-weight:700;">✕</span>`;
+    toast.onclick = () => toast.remove();
+    document.body.appendChild(toast);
+    setTimeout(() => { if (toast && toast.parentNode) toast.remove(); }, 6000);
   }
 
   function formatBytes(bytes) {

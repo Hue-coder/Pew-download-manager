@@ -252,17 +252,16 @@ async function triggerPewDownloadWithAutoWake(payload) {
   }
 
   // 2. Launch Pew Desktop in background via protocol
+  let helperTabId = null;
   try {
     chrome.tabs.create({ url: 'pew://start', active: false }, (tab) => {
-      setTimeout(() => {
-        if (tab && tab.id) chrome.tabs.remove(tab.id).catch(() => {});
-      }, 2000);
+      if (tab && tab.id) helperTabId = tab.id;
     });
   } catch (e) {}
 
-  // 3. Retry connecting to Pew every 600ms for up to 5 seconds
-  for (let attempt = 0; attempt < 8; attempt++) {
-    await new Promise(r => setTimeout(r, 600));
+  // 3. Retry connecting to Pew every 800ms for up to 10 seconds
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise(r => setTimeout(r, 800));
     try {
       const retryRes = await fetch('http://127.0.0.1:41738/download', {
         method: 'POST',
@@ -271,9 +270,16 @@ async function triggerPewDownloadWithAutoWake(payload) {
         signal: AbortSignal.timeout(2000)
       });
       if (retryRes.ok) {
+        if (helperTabId) {
+          chrome.tabs.remove(helperTabId).catch(() => {});
+        }
         return await retryRes.json();
       }
     } catch (e) {}
+  }
+
+  if (helperTabId) {
+    chrome.tabs.remove(helperTabId).catch(() => {});
   }
 
   throw new Error('PEW_OFFLINE');

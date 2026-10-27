@@ -1535,6 +1535,44 @@ fn register_pew_protocol() {
                     "/f"
                 ])
                 .output();
+
+            // Ensure Desktop & Start Menu shortcuts exist
+            if let Ok(user_profile) = std::env::var("USERPROFILE") {
+                let desktop_lnk = std::path::PathBuf::from(&user_profile).join("Desktop").join("Pew Download Manager.lnk");
+                let work_dir = exe_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| ".".to_string());
+                if !desktop_lnk.exists() {
+                    let _ = Command::new("powershell")
+                        .args([
+                            "-NoProfile",
+                            "-Command",
+                            &format!(
+                                "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.Save()",
+                                desktop_lnk.to_string_lossy(),
+                                exe_str,
+                                work_dir
+                            )
+                        ])
+                        .output();
+                }
+
+                if let Ok(appdata) = std::env::var("APPDATA") {
+                    let start_lnk = std::path::PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs").join("Pew Download Manager.lnk");
+                    if !start_lnk.exists() {
+                        let _ = Command::new("powershell")
+                            .args([
+                                "-NoProfile",
+                                "-Command",
+                                &format!(
+                                    "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.Save()",
+                                    start_lnk.to_string_lossy(),
+                                    exe_str,
+                                    work_dir
+                                )
+                            ])
+                            .output();
+                    }
+                }
+            }
         }
     }
 }

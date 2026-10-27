@@ -179,7 +179,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 btn.style.background = '';
               }, 3000);
             }
-            alert('Pew Download Manager is not running. Please open Pew Download Manager.');
+            statusBadge.className = 'app-status status-offline';
+            statusText.textContent = 'Pew Offline';
           }
         });
       });
