@@ -22,9 +22,16 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Build Optimized Release Binary
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Tauri Installers and Release Binary
+        shell: pwsh
         run: |
-          cargo build --release -p pew-gui
+          Set-Location "crates/pew-gui"
+          npx @tauri-apps/cli build
 
       - name: Package Release Assets
         shell: pwsh
@@ -44,6 +51,8 @@ jobs:
         with:
           name: "Pew Download Manager ${{ github.ref_name }}"
           files: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
             Pew-Download-Manager-Windows-x64.zip
             pew-browser-extension.zip
           generate_release_notes: true
