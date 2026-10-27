@@ -302,7 +302,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'OPEN_DOWNLOAD_FILE') {
     const path = message.path;
-    fetch(`http://127.0.0.1:41738/open_file?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(3000) })
+    const taskId = message.taskId;
+    const query = path ? `path=${encodeURIComponent(path)}` : `id=${encodeURIComponent(taskId || '')}`;
+    fetch(`http://127.0.0.1:41738/open_file?${query}`, { signal: AbortSignal.timeout(3000) })
       .then(r => r.json())
       .then(() => sendResponse({ success: true }))
       .catch(err => sendResponse({ success: false, error: err.message }));
@@ -311,7 +313,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'OPEN_DOWNLOAD_FOLDER') {
     const path = message.path;
-    fetch(`http://127.0.0.1:41738/open_folder?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(3000) })
+    const taskId = message.taskId;
+    const query = path ? `path=${encodeURIComponent(path)}` : `id=${encodeURIComponent(taskId || '')}`;
+    fetch(`http://127.0.0.1:41738/open_folder?${query}`, { signal: AbortSignal.timeout(3000) })
       .then(r => r.json())
       .then(() => sendResponse({ success: true }))
       .catch(err => sendResponse({ success: false, error: err.message }));

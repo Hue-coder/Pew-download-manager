@@ -761,19 +761,15 @@
     dismissBtn.addEventListener('click', dismissInPage);
 
     openFileBtn.addEventListener('click', () => {
-      if (activeInPageTargetPath) {
-        safeSendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeInPageTargetPath });
-        openFileBtn.textContent = '✓ Opened';
-        setTimeout(() => openFileBtn.textContent = '▶ Open File', 1500);
-      }
+      safeSendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeInPageTargetPath, taskId: taskId });
+      openFileBtn.textContent = '✓ Opened';
+      setTimeout(() => openFileBtn.textContent = '▶ Open File', 1500);
     });
 
     openFolderBtn.addEventListener('click', () => {
-      if (activeInPageTargetPath) {
-        safeSendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeInPageTargetPath });
-        openFolderBtn.textContent = '📂 Open Folder';
-        setTimeout(() => openFolderBtn.textContent = '📂 Open Folder', 1500);
-      }
+      safeSendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeInPageTargetPath, taskId: taskId });
+      openFolderBtn.textContent = '📂 Open Folder';
+      setTimeout(() => openFolderBtn.textContent = '📂 Open Folder', 1500);
     });
 
     activeInPagePoll = setInterval(() => {

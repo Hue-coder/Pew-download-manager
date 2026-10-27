@@ -198,6 +198,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let activePollInterval = null;
   let activeTargetPath = null;
+  let activeTaskId = null;
 
   function closeProgressModal() {
     if (activePollInterval) {
@@ -212,21 +213,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (btnOpenFile) {
     btnOpenFile.addEventListener('click', () => {
-      if (activeTargetPath) {
-        chrome.runtime.sendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeTargetPath });
-        btnOpenFile.textContent = '✓ Opened';
-        setTimeout(() => btnOpenFile.textContent = '▶ Open File', 1500);
-      }
+      chrome.runtime.sendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeTargetPath, taskId: activeTaskId });
+      btnOpenFile.textContent = '✓ Opened';
+      setTimeout(() => btnOpenFile.textContent = '▶ Open File', 1500);
     });
   }
 
   if (btnOpenFolder) {
     btnOpenFolder.addEventListener('click', () => {
-      if (activeTargetPath) {
-        chrome.runtime.sendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeTargetPath });
-        btnOpenFolder.textContent = '✓ Opened';
-        setTimeout(() => btnOpenFolder.textContent = '📂 Open Folder', 1500);
-      }
+      chrome.runtime.sendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeTargetPath, taskId: activeTaskId });
+      btnOpenFolder.textContent = '✓ Opened';
+      setTimeout(() => btnOpenFolder.textContent = '📂 Open Folder', 1500);
     });
   }
 
@@ -236,6 +233,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       activePollInterval = null;
     }
 
+    activeTaskId = taskId;
     activeTargetPath = null;
     popFilename.textContent = filename;
     popFilename.title = filename;

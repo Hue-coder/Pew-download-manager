@@ -1036,10 +1036,48 @@ async fn get_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadItem>, 
 fn open_in_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path))
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        use std::os::windows::process::CommandExt;
+        use std::path::Path;
+
+        let clean_str = path.replace('/', "\\");
+        let clean_path = clean_str.strip_prefix(r"\\?\").unwrap_or(&clean_str).trim();
+        if clean_path.is_empty() {
+            return Err("Empty path provided".to_string());
+        }
+
+        let p = Path::new(clean_path);
+
+        if p.is_file() {
+            // Must use raw_arg so Windows explorer receives: explorer.exe /select,"<clean_path>"
+            // Rust's standard Command::arg quotes the entire argument including /select,
+            // which causes explorer.exe to fail parsing and fall back to opening "Documents"!
+            std::process::Command::new("explorer")
+                .raw_arg(format!("/select,\"{}\"", clean_path))
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else if p.is_dir() {
+            std::process::Command::new("explorer")
+                .arg(clean_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else if let Some(parent) = p.parent() {
+            if parent.exists() {
+                std::process::Command::new("explorer")
+                    .arg(parent.to_string_lossy().to_string())
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            } else {
+                std::process::Command::new("explorer")
+                    .raw_arg(format!("/select,\"{}\"", clean_path))
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            }
+        } else {
+            std::process::Command::new("explorer")
+                .arg(clean_path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
@@ -1048,8 +1086,12 @@ fn open_in_folder(path: String) -> Result<(), String> {
 fn open_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path])
+        let clean_str = path.replace('/', "\\");
+        let clean_path = clean_str.strip_prefix(r"\\?\").unwrap_or(&clean_str).trim();
+        // Passing the file path to explorer.exe invokes the Windows default associated app
+        // without CMD.EXE code page corruptions on Unicode/Bengali characters!
+        std::process::Command::new("explorer")
+            .arg(clean_path)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -1326,59 +1368,94 @@ Connection: close\r\n\r\n{}",
                 // Direct file open command from extension
                 if first_line.contains("/open_file") {
                     let mut target_path = None;
+                    let mut task_id = None;
+
                     if let Some(query_start) = first_line.find('?') {
                         let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
                         for param in query.split('&') {
                             if let Some((k, v)) = param.split_once('=') {
                                 if k == "path" {
                                     target_path = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                } else if k == "id" || k == "task_id" {
+                                    task_id = urlencoding::decode(v).ok().map(|s| s.into_owned());
                                 }
                             }
                         }
                     } else if !body_part.trim().is_empty() {
                         #[derive(Deserialize)]
-                        struct OpenPayload { path: String }
+                        struct OpenPayload { path: Option<String>, id: Option<String> }
                         if let Ok(p) = serde_json::from_str::<OpenPayload>(body_part.trim()) {
-                            target_path = Some(p.path);
+                            target_path = p.path;
+                            task_id = p.id;
+                        }
+                    }
+
+                    if target_path.is_none() {
+                        if let Some(tid) = task_id {
+                            let map = dl_map.lock().await;
+                            if let Some(item) = map.get(&tid) {
+                                target_path = item.target_path.clone();
+                            }
                         }
                     }
 
                     if let Some(p) = target_path {
                         let _ = open_file(p);
-                        let resp = send_response("{\"success\":true}");
-                        let _ = socket.write_all(resp.as_bytes()).await;
-                        let _ = socket.flush().await;
-                        return;
                     }
+
+                    let resp = send_response("{\"success\":true}");
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    return;
                 }
 
                 // Direct folder open command from extension
                 if first_line.contains("/open_folder") {
                     let mut target_path = None;
+                    let mut task_id = None;
+
                     if let Some(query_start) = first_line.find('?') {
                         let query = first_line[query_start + 1..].split_whitespace().next().unwrap_or("");
                         for param in query.split('&') {
                             if let Some((k, v)) = param.split_once('=') {
                                 if k == "path" {
                                     target_path = urlencoding::decode(v).ok().map(|s| s.into_owned());
+                                } else if k == "id" || k == "task_id" {
+                                    task_id = urlencoding::decode(v).ok().map(|s| s.into_owned());
                                 }
                             }
                         }
                     } else if !body_part.trim().is_empty() {
                         #[derive(Deserialize)]
-                        struct OpenPayload { path: String }
+                        struct OpenPayload { path: Option<String>, id: Option<String> }
                         if let Ok(p) = serde_json::from_str::<OpenPayload>(body_part.trim()) {
-                            target_path = Some(p.path);
+                            target_path = p.path;
+                            task_id = p.id;
                         }
                     }
 
-                    if let Some(p) = target_path {
-                        let _ = open_in_folder(p);
-                        let resp = send_response("{\"success\":true}");
-                        let _ = socket.write_all(resp.as_bytes()).await;
-                        let _ = socket.flush().await;
-                        return;
+                    if target_path.is_none() {
+                        if let Some(tid) = task_id {
+                            let map = dl_map.lock().await;
+                            if let Some(item) = map.get(&tid) {
+                                target_path = item.target_path.clone();
+                            }
+                        }
                     }
+
+                    let path_to_open = match target_path {
+                        Some(p) if !p.trim().is_empty() => p,
+                        _ => {
+                            let cfg = cfg_ref.lock().await;
+                            cfg.download_dir.clone()
+                        }
+                    };
+
+                    let _ = open_in_folder(path_to_open);
+                    let resp = send_response("{\"success\":true}");
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    let _ = socket.flush().await;
+                    return;
                 }
 
                 // Default health check response
