@@ -122,25 +122,39 @@
 
     if (!hlsUrl && !mp4Url) return null;
 
-    const rawTitle = (foundTitle || document.title || 'Pinterest_Video').replace(/[\/\\:*?"<>|]/g, '_').trim();
+    const rawTitle = (foundTitle || document.title || 'Pinterest_Video').replace(/[\/\\:*?"<>|#]/g, '_').trim();
     const cleanTitle = rawTitle.replace(/[\s\-_]+/g, '_').substring(0, 40) || 'Pinterest_Video';
 
     let items = [];
 
-    // Option 1: Pinterest HD (with Sound) via HLS (Best quality + 100% full audio)
+    // Option 1: Direct authentic MP4 (Fastest download, lightweight size ~5-15MB, built-in audio, zero merging needed)
+    if (mp4Url) {
+      items.push({
+        id: 'pin_mp4_' + hashStr(mp4Url),
+        url: mp4Url,
+        filename: `${cleanTitle}_720p.mp4`,
+        format: 'MP4',
+        quality: '720p Direct MP4 (Light & Fast)',
+        mediaType: 'video',
+        size: 0,
+        priority: 1
+      });
+    }
+
+    // Option 2: Pinterest HD via HLS (Best quality + full audio stream)
     if (hlsUrl) {
       items.push({
         id: 'pin_hls_' + hashStr(hlsUrl),
         url: hlsUrl,
         filename: `${cleanTitle}_HD.mp4`,
         format: 'MP4 (Full Audio)',
-        quality: 'Pinterest HD (with Sound)',
+        quality: 'Pinterest HD (HLS Stream)',
         mediaType: 'video',
         size: 0,
-        priority: 1
+        priority: mp4Url ? 2 : 1
       });
 
-      // Option 2: Extract audio track as MP3
+      // Option 3: Extract audio track as MP3
       items.push({
         id: 'pin_aud_' + hashStr(hlsUrl),
         url: hlsUrl,
@@ -150,20 +164,6 @@
         mediaType: 'audio',
         size: 0,
         priority: 3
-      });
-    }
-
-    // Option 3: Direct verified MP4 (only if an authentic MP4 URL was found on the page)
-    if (mp4Url) {
-      items.push({
-        id: 'pin_mp4_' + hashStr(mp4Url),
-        url: mp4Url,
-        filename: `${cleanTitle}_720p.mp4`,
-        format: 'MP4',
-        quality: 'Direct 720p Stream',
-        mediaType: 'video',
-        size: 0,
-        priority: 2
       });
     }
 
@@ -628,11 +628,9 @@
   }
 
   // =========================================================================
-  // Live In-Page Progress Modal Window (Draggable & Moveable Anywhere)
+  // Live In-Page Multi-Progress Modal Windows (Draggable, Minimizable, Multi-File)
   // =========================================================================
-  let activeInPagePoll = null;
-  let activeInPageTargetPath = null;
-  let lastProgressPos = null;
+  const activeInPageModals = new Map(); // taskId -> { boxEl, pollInterval, currentTargetPath, isMinimized, expand }
 
   function makeProgressDraggable(container, handle, altHandle) {
     let isDragging = false;
@@ -676,8 +674,6 @@
 
       container.style.left = `${newLeft}px`;
       container.style.top = `${newTop}px`;
-
-      lastProgressPos = { left: newLeft, top: newTop };
     });
 
     document.addEventListener('mouseup', () => {
@@ -689,110 +685,146 @@
   }
 
   function showInPageProgressModal(taskId, filename) {
-    if (activeInPagePoll) {
-      clearInterval(activeInPagePoll);
-      activeInPagePoll = null;
+    // If modal already exists for this task, unminimize/bring to front
+    if (activeInPageModals.has(taskId)) {
+      const existing = activeInPageModals.get(taskId);
+      if (existing && existing.expand) existing.expand();
+      return;
     }
 
-    let progressBox = document.getElementById('pew-inpage-progress-modal');
+    const modalId = `pew-inpage-modal-${taskId}`;
+    let progressBox = document.getElementById(modalId);
     if (!progressBox) {
       progressBox = document.createElement('div');
-      progressBox.id = 'pew-inpage-progress-modal';
+      progressBox.id = modalId;
       progressBox.className = 'pew-inpage-modal-wrap';
       document.body.appendChild(progressBox);
     }
 
-    if (lastProgressPos) {
-      progressBox.style.bottom = 'auto';
-      progressBox.style.right = 'auto';
-      progressBox.style.left = `${lastProgressPos.left}px`;
-      progressBox.style.top = `${lastProgressPos.top}px`;
-    } else {
-      progressBox.style.bottom = '24px';
-      progressBox.style.right = '24px';
-      progressBox.style.left = 'auto';
-      progressBox.style.top = 'auto';
-    }
+    // Stagger position for multiple simultaneous download popups
+    const modalIndex = activeInPageModals.size;
+    const bottomOffset = 24 + (modalIndex % 4) * 175;
+    const rightOffset = 24 + Math.floor(modalIndex / 4) * 345;
 
-    activeInPageTargetPath = null;
+    progressBox.style.bottom = `${bottomOffset}px`;
+    progressBox.style.right = `${rightOffset}px`;
+    progressBox.style.left = 'auto';
+    progressBox.style.top = 'auto';
+    progressBox.style.zIndex = `${2147483640 + modalIndex}`;
+
+    let currentTargetPath = null;
+    let isMinimized = false;
+
     progressBox.innerHTML = `
-      <div class="pew-inpage-card">
+      <div class="pew-inpage-card" id="card-${taskId}">
         <div class="pew-inpage-header" title="Drag to move">
           <div class="pew-inpage-title-row">
             <span class="pew-inpage-drag-handle" title="Drag to move">⋮⋮</span>
             <span class="pew-inpage-bolt">⚡</span>
             <span class="pew-inpage-title" title="${filename}">${filename}</span>
           </div>
-          <button class="pew-inpage-close" id="btn-inpage-close" title="Close">&times;</button>
+          <div class="pew-inpage-window-actions">
+            <span class="pew-inpage-mini-percent" id="mini-pct-${taskId}">0%</span>
+            <button class="pew-inpage-btn-min" id="btn-min-${taskId}" title="Minimize">—</button>
+            <button class="pew-inpage-close" id="btn-close-${taskId}" title="Close">&times;</button>
+          </div>
         </div>
-        <div class="pew-inpage-body">
+        <div class="pew-inpage-body" id="body-${taskId}">
           <div class="pew-inpage-bar-track">
-            <div class="pew-inpage-bar-fill" id="pew-inpage-bar" style="width: 0%;"></div>
+            <div class="pew-inpage-bar-fill" id="bar-${taskId}" style="width: 0%;"></div>
           </div>
           <div class="pew-inpage-stats-row">
-            <span class="pew-inpage-status" id="pew-inpage-status">Connecting to Pew Engine...</span>
-            <span class="pew-inpage-percent" id="pew-inpage-percent">0%</span>
+            <span class="pew-inpage-status" id="status-${taskId}">Connecting to Pew Engine...</span>
+            <span class="pew-inpage-percent" id="pct-${taskId}">0%</span>
           </div>
           <div class="pew-inpage-substats">
-            <span id="pew-inpage-size">0 B</span>
-            <span id="pew-inpage-speed">0 KB/s</span>
+            <span id="size-${taskId}">0 B</span>
+            <span id="speed-${taskId}">0 KB/s</span>
           </div>
         </div>
-        <div class="pew-inpage-footer" id="pew-inpage-footer" style="display: none;">
-          <button class="pew-inpage-btn pew-inpage-btn-primary" id="btn-inpage-open-file">▶ Open File</button>
-          <button class="pew-inpage-btn pew-inpage-btn-secondary" id="btn-inpage-open-folder">📂 Open Folder</button>
-          <button class="pew-inpage-btn pew-inpage-btn-secondary" id="btn-inpage-dismiss">✕ Close</button>
+        <div class="pew-inpage-footer" id="footer-${taskId}" style="display: none;">
+          <button class="pew-inpage-btn pew-inpage-btn-primary" id="btn-open-file-${taskId}">▶ Open File</button>
+          <button class="pew-inpage-btn pew-inpage-btn-secondary" id="btn-open-folder-${taskId}">📂 Open Folder</button>
+          <button class="pew-inpage-btn pew-inpage-btn-secondary" id="btn-dismiss-${taskId}">✕ Close</button>
         </div>
       </div>
     `;
 
     progressBox.style.display = 'block';
 
+    const cardEl = progressBox.querySelector(`#card-${taskId}`);
     const headerEl = progressBox.querySelector('.pew-inpage-header');
-    const bodyEl = progressBox.querySelector('.pew-inpage-body');
+    const bodyEl = progressBox.querySelector(`#body-${taskId}`);
     makeProgressDraggable(progressBox, headerEl, bodyEl);
 
-    const closeBtn = progressBox.querySelector('#btn-inpage-close');
-    const dismissBtn = progressBox.querySelector('#btn-inpage-dismiss');
-    const openFileBtn = progressBox.querySelector('#btn-inpage-open-file');
-    const openFolderBtn = progressBox.querySelector('#btn-inpage-open-folder');
+    const minBtn = progressBox.querySelector(`#btn-min-${taskId}`);
+    const closeBtn = progressBox.querySelector(`#btn-close-${taskId}`);
+    const dismissBtn = progressBox.querySelector(`#btn-dismiss-${taskId}`);
+    const openFileBtn = progressBox.querySelector(`#btn-open-file-${taskId}`);
+    const openFolderBtn = progressBox.querySelector(`#btn-open-folder-${taskId}`);
 
-    const barEl = progressBox.querySelector('#pew-inpage-bar');
-    const statusEl = progressBox.querySelector('#pew-inpage-status');
-    const percentEl = progressBox.querySelector('#pew-inpage-percent');
-    const sizeEl = progressBox.querySelector('#pew-inpage-size');
-    const speedEl = progressBox.querySelector('#pew-inpage-speed');
-    const footerEl = progressBox.querySelector('#pew-inpage-footer');
+    const barEl = progressBox.querySelector(`#bar-${taskId}`);
+    const statusEl = progressBox.querySelector(`#status-${taskId}`);
+    const percentEl = progressBox.querySelector(`#pct-${taskId}`);
+    const miniPctEl = progressBox.querySelector(`#mini-pct-${taskId}`);
+    const sizeEl = progressBox.querySelector(`#size-${taskId}`);
+    const speedEl = progressBox.querySelector(`#speed-${taskId}`);
+    const footerEl = progressBox.querySelector(`#footer-${taskId}`);
 
-    function dismissInPage() {
-      if (activeInPagePoll) {
-        clearInterval(activeInPagePoll);
-        activeInPagePoll = null;
+    function toggleMinimize(e) {
+      if (e) e.stopPropagation();
+      isMinimized = !isMinimized;
+      if (isMinimized) {
+        cardEl.classList.add('pew-minimized');
+        minBtn.textContent = '▢';
+        minBtn.title = 'Expand';
+      } else {
+        cardEl.classList.remove('pew-minimized');
+        minBtn.textContent = '—';
+        minBtn.title = 'Minimize';
       }
-      progressBox.style.display = 'none';
     }
 
-    closeBtn.addEventListener('click', dismissInPage);
-    dismissBtn.addEventListener('click', dismissInPage);
+    minBtn.addEventListener('click', toggleMinimize);
+
+    headerEl.addEventListener('click', (e) => {
+      if (isMinimized && !e.target.closest('button')) {
+        toggleMinimize();
+      }
+    });
+
+    let pollInterval = null;
+
+    function dismissThisModal() {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      progressBox.remove();
+      activeInPageModals.delete(taskId);
+    }
+
+    closeBtn.addEventListener('click', dismissThisModal);
+    dismissBtn.addEventListener('click', dismissThisModal);
 
     openFileBtn.addEventListener('click', () => {
-      safeSendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: activeInPageTargetPath, taskId: taskId });
+      safeSendMessage({ action: 'OPEN_DOWNLOAD_FILE', path: currentTargetPath, taskId: taskId });
       openFileBtn.textContent = '✓ Opened';
       setTimeout(() => openFileBtn.textContent = '▶ Open File', 1500);
     });
 
     openFolderBtn.addEventListener('click', () => {
-      safeSendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: activeInPageTargetPath, taskId: taskId });
+      safeSendMessage({ action: 'OPEN_DOWNLOAD_FOLDER', path: currentTargetPath, taskId: taskId });
       openFolderBtn.textContent = '📂 Open Folder';
       setTimeout(() => openFolderBtn.textContent = '📂 Open Folder', 1500);
     });
 
-    activeInPagePoll = setInterval(() => {
+    pollInterval = setInterval(() => {
       safeSendMessage({ action: 'POLL_TASK_PROGRESS', taskId }, (res) => {
         if (!res || !res.success || !res.task) return;
 
         const task = res.task;
-        if (task.target_path) activeInPageTargetPath = task.target_path;
+        if (task.target_path) currentTargetPath = task.target_path;
 
         const downloaded = task.downloaded_bytes || 0;
         const total = task.total_bytes || 0;
@@ -806,6 +838,7 @@
         const isComplete = task.status === 'Completed';
         barEl.style.width = (isComplete ? 100 : pct) + '%';
         percentEl.textContent = (isComplete ? 100 : pct) + '%';
+        miniPctEl.textContent = (isComplete ? '✓ Done' : (pct + '%'));
         statusEl.textContent = task.status || 'Downloading...';
 
         if (total > 0) {
@@ -817,24 +850,38 @@
         speedEl.textContent = speed > 0 ? `${formatBytes(speed)}/s` : '';
 
         if (isComplete) {
-          clearInterval(activeInPagePoll);
-          activeInPagePoll = null;
+          clearInterval(pollInterval);
+          pollInterval = null;
           barEl.style.background = 'linear-gradient(135deg, #22c55e, #10b981)';
           barEl.style.boxShadow = '0 0 10px rgba(34, 197, 94, 0.7)';
           statusEl.textContent = '✓ Download Complete!';
           statusEl.style.color = '#22c55e';
+          miniPctEl.style.color = '#22c55e';
           footerEl.style.display = 'flex';
         } else if (task.status === 'Error') {
-          clearInterval(activeInPagePoll);
-          activeInPagePoll = null;
+          clearInterval(pollInterval);
+          pollInterval = null;
           barEl.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
           statusEl.textContent = `❌ ${task.error || 'Download failed'}`;
           statusEl.style.color = '#ef4444';
+          miniPctEl.textContent = '❌ Err';
+          miniPctEl.style.color = '#ef4444';
           footerEl.style.display = 'flex';
           openFileBtn.style.display = 'none';
           openFolderBtn.style.display = 'none';
         }
       });
-    }, 400);
+    }, 450);
+
+    activeInPageModals.set(taskId, {
+      boxEl: progressBox,
+      pollInterval,
+      expand: () => {
+        isMinimized = false;
+        cardEl.classList.remove('pew-minimized');
+        minBtn.textContent = '—';
+        minBtn.title = 'Minimize';
+      }
+    });
   }
 })();

@@ -138,20 +138,45 @@ async fn mux_video_audio(ffmpeg_exe: &Path, vid_path: &Path, aud_path: &Path, ou
     let ffmpeg_str = ffmpeg_exe.to_string_lossy().to_string();
 
     tokio::task::spawn_blocking(move || {
-        let status = std::process::Command::new(ffmpeg_str)
+        // Attempt 1: Ultra-fast stream copy (-c copy) without re-encoding (< 0.5s for any file size)
+        let fast_status = std::process::Command::new(&ffmpeg_str)
             .args([
                 "-y",
                 "-i", &vid_str,
                 "-i", &aud_str,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-strict", "experimental",
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-c", "copy",
+                "-shortest",
                 "-movflags", "+faststart",
                 &out_str,
             ])
             .output();
 
-        match status {
+        if let Ok(o) = fast_status {
+            if o.status.success() {
+                return Ok(());
+            }
+        }
+
+        // Attempt 2: If audio codec requires re-encoding to AAC
+        let encode_status = std::process::Command::new(&ffmpeg_str)
+            .args([
+                "-y",
+                "-i", &vid_str,
+                "-i", &aud_str,
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-shortest",
+                "-movflags", "+faststart",
+                &out_str,
+            ])
+            .output();
+
+        match encode_status {
             Ok(o) if o.status.success() => Ok(()),
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
@@ -309,7 +334,7 @@ async fn resolve_media_options(url: &str) -> MediaResolveResult {
             if o.status.success() {
                 if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
                     let raw_title = data["title"].as_str().unwrap_or("Media_Video");
-                    let clean_title = raw_title.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_");
+                    let clean_title = raw_title.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|', '#'], "_");
 
                     let mut formats = Vec::new();
                     let mut audio_url = None;
@@ -660,9 +685,12 @@ async fn start_download_internal(
     let default_dir = dirs_fallback();
     let out_dir = output_dir.map(PathBuf::from).unwrap_or(default_dir);
 
-    let initial_name = filename.clone().unwrap_or_else(|| {
+    let raw_initial_name = filename.clone().unwrap_or_else(|| {
         url.split('?').next().and_then(|u| u.split('/').last()).unwrap_or("download").to_string()
     });
+    let initial_name = raw_initial_name.replace('#', "_");
+    let target_final_path = out_dir.join(&initial_name);
+    let target_final_str = target_final_path.to_string_lossy().to_string();
 
     if url.starts_with("blob:") {
         let err_msg = "Cannot download browser-internal blob URL. Please use the extension to select the direct stream.".to_string();
@@ -670,7 +698,7 @@ async fn start_download_internal(
             id: id.clone(),
             url: url.clone(),
             filename: initial_name,
-            target_path: None,
+            target_path: Some(target_final_str),
             total_bytes: None,
             downloaded_bytes: 0,
             speed_bps: 0.0,
@@ -690,7 +718,7 @@ async fn start_download_internal(
         id: id.clone(),
         url: url.clone(),
         filename: initial_name.clone(),
-        target_path: None,
+        target_path: Some(target_final_str),
         total_bytes: None,
         downloaded_bytes: 0,
         speed_bps: 0.0,
@@ -1049,32 +1077,30 @@ fn open_in_folder(path: String) -> Result<(), String> {
 
         if p.is_file() {
             // Must use raw_arg so Windows explorer receives: explorer.exe /select,"<clean_path>"
-            // Rust's standard Command::arg quotes the entire argument including /select,
-            // which causes explorer.exe to fail parsing and fall back to opening "Documents"!
             std::process::Command::new("explorer")
                 .raw_arg(format!("/select,\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         } else if p.is_dir() {
             std::process::Command::new("explorer")
-                .arg(clean_path)
+                .raw_arg(format!("\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         } else if let Some(parent) = p.parent() {
             if parent.exists() {
                 std::process::Command::new("explorer")
-                    .arg(parent.to_string_lossy().to_string())
+                    .raw_arg(format!("\"{}\"", parent.to_string_lossy()))
                     .spawn()
                     .map_err(|e| e.to_string())?;
             } else {
                 std::process::Command::new("explorer")
-                    .raw_arg(format!("/select,\"{}\"", clean_path))
+                    .raw_arg(format!("\"{}\"", clean_path))
                     .spawn()
                     .map_err(|e| e.to_string())?;
             }
         } else {
             std::process::Command::new("explorer")
-                .arg(clean_path)
+                .raw_arg(format!("\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
@@ -1444,7 +1470,22 @@ Connection: close\r\n\r\n{}",
                     }
 
                     let path_to_open = match target_path {
-                        Some(p) if !p.trim().is_empty() => p,
+                        Some(ref p) if !p.trim().is_empty() => {
+                            let p_obj = std::path::Path::new(p);
+                            if p_obj.is_file() {
+                                p.clone()
+                            } else if let Some(parent) = p_obj.parent() {
+                                if parent.exists() {
+                                    parent.to_string_lossy().to_string()
+                                } else {
+                                    let cfg = cfg_ref.lock().await;
+                                    cfg.download_dir.clone()
+                                }
+                            } else {
+                                let cfg = cfg_ref.lock().await;
+                                cfg.download_dir.clone()
+                            }
+                        }
                         _ => {
                             let cfg = cfg_ref.lock().await;
                             cfg.download_dir.clone()
