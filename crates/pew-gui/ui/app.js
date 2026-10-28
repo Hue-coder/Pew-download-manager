@@ -6,6 +6,16 @@ const tauri = window.__TAURI__;
 const invoke = tauri ? (tauri.core ? tauri.core.invoke : tauri.invoke) : null;
 const listen = tauri ? (tauri.event ? tauri.event.listen : null) : null;
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // Application State
 const state = {
   downloads: new Map(),
@@ -155,16 +165,82 @@ function setupEventListeners() {
     }
   });
 
-  // Toolbar Delete Selected
-  btnToolbarDelete.addEventListener('click', async () => {
-    if (state.selectedIds.size === 0) return;
-    if (confirm(`Remove ${state.selectedIds.size} selected download(s) from the list?`)) {
-      for (const id of state.selectedIds) {
-        if (invoke) await invoke('delete_download', { id, deleteFile: false });
+  // Delete Modal Setup & Handlers
+  const modalDeleteConfirm = document.getElementById('modal-delete-confirm');
+  const deleteModalClose = document.getElementById('delete-modal-close');
+  const btnDeleteCancel = document.getElementById('btn-delete-cancel');
+  const btnDeleteConfirm = document.getElementById('btn-delete-confirm');
+  const chkDeleteDiskFile = document.getElementById('chk-delete-disk-file');
+  const deleteModalMsg = document.getElementById('delete-modal-msg');
+  let pendingDeleteIds = [];
+
+  function promptDeleteDownloads(ids) {
+    if (!ids || ids.length === 0) return;
+    pendingDeleteIds = ids;
+    const count = ids.length;
+    if (count === 1) {
+      const item = state.downloads.get(ids[0]);
+      const name = item ? item.filename : 'this item';
+      deleteModalMsg.innerHTML = `Are you sure you want to delete <strong style="color: #fff;">"${escapeHtml(name)}"</strong>?`;
+    } else {
+      deleteModalMsg.innerHTML = `Are you sure you want to delete <strong style="color: #fff;">${count}</strong> selected downloads?`;
+    }
+    if (chkDeleteDiskFile) chkDeleteDiskFile.checked = true;
+    if (modalDeleteConfirm) modalDeleteConfirm.classList.add('active');
+  }
+
+  function closeDeleteModal() {
+    if (modalDeleteConfirm) modalDeleteConfirm.classList.remove('active');
+    pendingDeleteIds = [];
+  }
+
+  if (deleteModalClose) deleteModalClose.addEventListener('click', closeDeleteModal);
+  if (btnDeleteCancel) btnDeleteCancel.addEventListener('click', closeDeleteModal);
+
+  if (btnDeleteConfirm) {
+    btnDeleteConfirm.addEventListener('click', async () => {
+      const shouldDeleteFile = chkDeleteDiskFile ? chkDeleteDiskFile.checked : true;
+      const idsToDelete = [...pendingDeleteIds];
+      closeDeleteModal();
+
+      for (const id of idsToDelete) {
+        if (invoke) {
+          try {
+            await invoke('delete_download', { id, delete_file: shouldDeleteFile, deleteFile: shouldDeleteFile });
+          } catch (err) {
+            console.error('delete_download error:', err);
+          }
+        }
         state.downloads.delete(id);
+        state.selectedIds.delete(id);
       }
-      state.selectedIds.clear();
+      btnToolbarDelete.disabled = state.selectedIds.size === 0;
       renderTable();
+    });
+  }
+
+  // Toolbar Delete Selected
+  btnToolbarDelete.addEventListener('click', () => {
+    if (state.selectedIds.size === 0) return;
+    promptDeleteDownloads(Array.from(state.selectedIds));
+  });
+
+  // Global Keyboard Shortcuts (Delete / Backspace / Escape)
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (modalDeleteConfirm && modalDeleteConfirm.classList.contains('active')) {
+        closeDeleteModal();
+      }
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (modalDeleteConfirm && modalDeleteConfirm.classList.contains('active')) return;
+      if (state.selectedIds.size > 0) {
+        e.preventDefault();
+        promptDeleteDownloads(Array.from(state.selectedIds));
+      }
     }
   });
 
@@ -298,13 +374,10 @@ function setupEventListeners() {
     }
   });
 
-  document.getElementById('ctx-delete').addEventListener('click', async () => {
+  document.getElementById('ctx-delete').addEventListener('click', () => {
     contextMenu.style.display = 'none';
     if (contextTargetId) {
-      if (invoke) await invoke('delete_download', { id: contextTargetId, deleteFile: false });
-      state.downloads.delete(contextTargetId);
-      state.selectedIds.delete(contextTargetId);
-      renderTable();
+      promptDeleteDownloads([contextTargetId]);
     }
   });
 
@@ -327,13 +400,13 @@ function setupEventListeners() {
     renderTable();
   });
   document.getElementById('opt-check-updates').addEventListener('click', () => {
-    alert('Pew Download Manager v0.1.0\n\nYou are running the latest version with AB Download Manager UI and high-speed multi-threaded engine!');
+    alert('Pew Download Manager v0.1.2\n\nYou are running the latest version with AB Download Manager UI and high-speed multi-threaded engine!');
   });
   document.getElementById('opt-browser-integration').addEventListener('click', () => {
     openBrowserIntegrationModal();
   });
   document.getElementById('opt-about').addEventListener('click', () => {
-    alert('Pew Download Manager v0.1.0\nHigh-Performance Multi-threaded Rust Core\nModeled after AB Download Manager');
+    alert('Pew Download Manager v0.1.2\nHigh-Performance Multi-threaded Rust Core\nModeled after AB Download Manager');
   });
   document.getElementById('opt-github').addEventListener('click', () => {
     window.open('https://github.com/Hue-coder/Pew-download-manager', '_blank');

@@ -30,16 +30,15 @@ Pop-Location
 
 # 4. Copy installers and create portable zip
 Write-Host "`n[2/3] Packaging Desktop Executables..." -ForegroundColor Yellow
-$nsisSource = Join-Path $rootDir "target\release\bundle\nsis\Pew Download Manager_0.1.0_x64-setup.exe"
-$msiSource = Join-Path $rootDir "target\release\bundle\msi\Pew Download Manager_0.1.0_x64_en-US.msi"
+$nsisFiles = Get-ChildItem -Path (Join-Path $rootDir "target\release\bundle\nsis") -Filter "*setup.exe" -ErrorAction SilentlyContinue
+foreach ($f in $nsisFiles) {
+    Copy-Item $f.FullName -Destination $distDir -Force
+}
+$msiFiles = Get-ChildItem -Path (Join-Path $rootDir "target\release\bundle\msi") -Filter "*.msi" -ErrorAction SilentlyContinue
+foreach ($f in $msiFiles) {
+    Copy-Item $f.FullName -Destination $distDir -Force
+}
 $portableExe = Join-Path $rootDir "target\release\pew-gui.exe"
-
-if (Test-Path $nsisSource) {
-    Copy-Item $nsisSource -Destination $distDir -Force
-}
-if (Test-Path $msiSource) {
-    Copy-Item $msiSource -Destination $distDir -Force
-}
 if (Test-Path $portableExe) {
     $stageDir = Join-Path $distDir "portable_stage"
     if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }

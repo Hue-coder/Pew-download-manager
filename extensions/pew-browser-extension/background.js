@@ -365,7 +365,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'OPEN_DOWNLOAD_FILE') {
     const path = message.path;
     const taskId = message.taskId;
-    const query = path ? `path=${encodeURIComponent(path)}` : `id=${encodeURIComponent(taskId || '')}`;
+    const queryParts = [];
+    if (path) queryParts.push(`path=${encodeURIComponent(path)}`);
+    if (taskId) queryParts.push(`id=${encodeURIComponent(taskId)}`);
+    const query = queryParts.join('&');
     fetch(`http://127.0.0.1:41738/open_file?${query}`, { signal: AbortSignal.timeout(3000) })
       .then(r => r.json())
       .then(() => sendResponse({ success: true }))
@@ -376,7 +379,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'OPEN_DOWNLOAD_FOLDER') {
     const path = message.path;
     const taskId = message.taskId;
-    const query = path ? `path=${encodeURIComponent(path)}` : `id=${encodeURIComponent(taskId || '')}`;
+    const queryParts = [];
+    if (path) queryParts.push(`path=${encodeURIComponent(path)}`);
+    if (taskId) queryParts.push(`id=${encodeURIComponent(taskId)}`);
+    const query = queryParts.join('&');
     fetch(`http://127.0.0.1:41738/open_folder?${query}`, { signal: AbortSignal.timeout(3000) })
       .then(r => r.json())
       .then(() => sendResponse({ success: true }))

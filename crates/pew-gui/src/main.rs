@@ -784,12 +784,57 @@ async fn start_download(
 }
 
 #[tauri::command]
-async fn delete_download(state: State<'_, AppState>, id: String, delete_file: bool) -> Result<(), String> {
+async fn delete_download(
+    state: State<'_, AppState>,
+    id: String,
+    delete_file: Option<bool>,
+) -> Result<(), String> {
+    let should_delete_file = delete_file.unwrap_or(true);
     let mut map = state.downloads.lock().await;
     if let Some(item) = map.remove(&id) {
-        if delete_file {
-            if let Some(target) = item.target_path {
-                let _ = tokio::fs::remove_file(target).await;
+        if should_delete_file {
+            let mut resolved_file: Option<PathBuf> = None;
+
+            // 1. Check item.target_path
+            if let Some(ref target) = item.target_path {
+                let p = PathBuf::from(target);
+                if p.exists() {
+                    resolved_file = Some(p);
+                }
+            }
+
+            // 2. Fallback: check configured download_dir / item.filename
+            if resolved_file.is_none() {
+                let cfg = state.settings.lock().await;
+                let candidate = PathBuf::from(&cfg.download_dir).join(&item.filename);
+                if candidate.exists() {
+                    resolved_file = Some(candidate);
+                }
+            }
+
+            // 3. Fallback: check default dirs_fallback / item.filename
+            if resolved_file.is_none() {
+                let def = dirs_fallback().join(&item.filename);
+                if def.exists() {
+                    resolved_file = Some(def);
+                }
+            }
+
+            // 4. Delete the physical file
+            if let Some(file_to_del) = resolved_file {
+                if file_to_del.is_file() {
+                    if let Err(e) = tokio::fs::remove_file(&file_to_del).await {
+                        tracing::warn!("Failed to delete file {}: {}", file_to_del.display(), e);
+                    } else {
+                        tracing::info!("Deleted file from disk: {}", file_to_del.display());
+                    }
+                }
+            }
+
+            // 5. Clean up any leftover temporary files or directory for this task
+            let temp_task_dir = std::env::temp_dir().join("PewDownloads").join(&id);
+            if temp_task_dir.exists() {
+                let _ = tokio::fs::remove_dir_all(&temp_task_dir).await;
             }
         }
     }
@@ -822,12 +867,36 @@ async fn start_download_internal(
 
     let default_dir = dirs_fallback();
     let out_dir = output_dir.map(PathBuf::from).unwrap_or(default_dir);
+    let _ = tokio::fs::create_dir_all(&out_dir).await;
 
     let raw_initial_name = filename.clone().unwrap_or_else(|| {
         url.split('?').next().and_then(|u| u.split('/').last()).unwrap_or("download").to_string()
     });
-    let initial_name = raw_initial_name.replace('#', "_");
-    let target_final_path = out_dir.join(&initial_name);
+    let sanitized_name = raw_initial_name
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '#'], "_");
+    let base_name = if sanitized_name.trim().is_empty() {
+        "download".to_string()
+    } else {
+        sanitized_name
+    };
+
+    let mut target_final_path = out_dir.join(&base_name);
+    let mut initial_name = base_name.clone();
+    if target_final_path.exists() {
+        let p = std::path::Path::new(&base_name);
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("download");
+        let ext = p.extension().and_then(|s| s.to_str());
+        let mut counter = 1;
+        while target_final_path.exists() {
+            let candidate_name = match ext {
+                Some(e) => format!("{}_{}.{}", stem, counter, e),
+                None => format!("{}_{}", stem, counter),
+            };
+            target_final_path = out_dir.join(&candidate_name);
+            initial_name = candidate_name;
+            counter += 1;
+        }
+    }
     let target_final_str = target_final_path.to_string_lossy().to_string();
 
     if url.starts_with("blob:") {
@@ -1147,11 +1216,40 @@ async fn start_download_internal(
                 Err(err) => {
                     tracing::warn!("FFmpeg HLS failed ({}), fallback to internal downloader", err);
                     let temp_dl_name = "hls_fb.tmp".to_string();
-                    match downloader.download(&url, &temp_base_dir, Some(&temp_dl_name), Some(tx)).await {
+                    let (fb_tx, mut fb_rx) = mpsc::unbounded_channel::<DownloadEvent>();
+                    let main_tx = tx.clone();
+                    let fb_name = initial_name.clone();
+                    tauri::async_runtime::spawn(async move {
+                        while let Some(ev) = fb_rx.recv().await {
+                            match ev {
+                                DownloadEvent::Started { total_bytes, parts, .. } => {
+                                    let _ = main_tx.send(DownloadEvent::Started {
+                                        total_bytes,
+                                        parts,
+                                        filename: fb_name.clone(),
+                                    });
+                                }
+                                DownloadEvent::Progress { downloaded, total, speed_bps } => {
+                                    let _ = main_tx.send(DownloadEvent::Progress { downloaded, total, speed_bps });
+                                }
+                                DownloadEvent::Error(e) => {
+                                    let _ = main_tx.send(DownloadEvent::Error(e));
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+
+                    match downloader.download(&url, &temp_base_dir, Some(&temp_dl_name), Some(fb_tx)).await {
                         Ok(_) => {
                             let fb_path = temp_base_dir.join(&temp_dl_name);
                             let _ = safe_move_file(&fb_path, &target_final_path).await;
                             let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
+                            let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
+                            let _ = tx.send(DownloadEvent::Completed {
+                                path: target_final_path,
+                                total_bytes: final_size,
+                            });
                             let _ = progress_tracker.await;
                         }
                         Err(e) => {
@@ -1169,11 +1267,40 @@ async fn start_download_internal(
         } else {
             // Standard direct file -> Download into temp folder, move to destination when 100% complete
             let temp_direct_name = format!("{}.part", task_id);
-            match downloader.download(&url, &temp_base_dir, Some(&temp_direct_name), Some(tx)).await {
+            let (dir_tx, mut dir_rx) = mpsc::unbounded_channel::<DownloadEvent>();
+            let main_tx = tx.clone();
+            let d_name = initial_name.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(ev) = dir_rx.recv().await {
+                    match ev {
+                        DownloadEvent::Started { total_bytes, parts, .. } => {
+                            let _ = main_tx.send(DownloadEvent::Started {
+                                total_bytes,
+                                parts,
+                                filename: d_name.clone(),
+                            });
+                        }
+                        DownloadEvent::Progress { downloaded, total, speed_bps } => {
+                            let _ = main_tx.send(DownloadEvent::Progress { downloaded, total, speed_bps });
+                        }
+                        DownloadEvent::Error(e) => {
+                            let _ = main_tx.send(DownloadEvent::Error(e));
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            match downloader.download(&url, &temp_base_dir, Some(&temp_direct_name), Some(dir_tx)).await {
                 Ok(_) => {
                     let dl_path = temp_base_dir.join(&temp_direct_name);
                     let _ = safe_move_file(&dl_path, &target_final_path).await;
                     let _ = tokio::fs::remove_dir_all(&temp_base_dir).await;
+                    let final_size = tokio::fs::metadata(&target_final_path).await.map(|m| m.len()).unwrap_or(0);
+                    let _ = tx.send(DownloadEvent::Completed {
+                        path: target_final_path,
+                        total_bytes: final_size,
+                    });
                     let _ = progress_tracker.await;
                 }
                 Err(e) => {
@@ -1207,38 +1334,38 @@ fn open_in_folder(path: String) -> Result<(), String> {
 
         let clean_str = path.replace('/', "\\");
         let clean_path = clean_str.strip_prefix(r"\\?\").unwrap_or(&clean_str).trim();
+        let fallback_dir = dirs_fallback();
+
         if clean_path.is_empty() {
-            return Err("Empty path provided".to_string());
+            hidden_cmd("explorer")
+                .raw_arg(format!("\"{}\"", fallback_dir.to_string_lossy()))
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            return Ok(());
         }
 
         let p = Path::new(clean_path);
 
-        if p.is_file() {
+        if p.is_file() && p.exists() {
             // Must use raw_arg so Windows explorer receives: explorer.exe /select,"<clean_path>"
             hidden_cmd("explorer")
                 .raw_arg(format!("/select,\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
-        } else if p.is_dir() {
+        } else if p.is_dir() && p.exists() {
             hidden_cmd("explorer")
                 .raw_arg(format!("\"{}\"", clean_path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
-        } else if let Some(parent) = p.parent() {
-            if parent.exists() {
-                hidden_cmd("explorer")
-                    .raw_arg(format!("\"{}\"", parent.to_string_lossy()))
-                    .spawn()
-                    .map_err(|e| e.to_string())?;
-            } else {
-                hidden_cmd("explorer")
-                    .raw_arg(format!("\"{}\"", clean_path))
-                    .spawn()
-                    .map_err(|e| e.to_string())?;
-            }
-        } else {
+        } else if let Some(parent) = p.parent().filter(|d| d.exists()) {
             hidden_cmd("explorer")
-                .raw_arg(format!("\"{}\"", clean_path))
+                .raw_arg(format!("\"{}\"", parent.to_string_lossy()))
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        } else {
+            // Absolute fallback: open user's Downloads directory (never launch explorer with non-existent path to prevent Windows from defaulting to Documents)
+            hidden_cmd("explorer")
+                .raw_arg(format!("\"{}\"", fallback_dir.to_string_lossy()))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
@@ -1252,6 +1379,10 @@ fn open_file(path: String) -> Result<(), String> {
     {
         let clean_str = path.replace('/', "\\");
         let clean_path = clean_str.strip_prefix(r"\\?\").unwrap_or(&clean_str).trim();
+        let p = std::path::Path::new(clean_path);
+        if !p.exists() {
+            return Err(format!("File does not exist: {}", clean_path));
+        }
         // Passing the file path to explorer.exe invokes the Windows default associated app
         // without CMD.EXE code page corruptions on Unicode/Bengali characters!
         hidden_cmd("explorer")
@@ -1265,11 +1396,21 @@ fn open_file(path: String) -> Result<(), String> {
 #[tauri::command]
 fn get_extension_info() -> Result<serde_json::Value, String> {
     let mut ext_dir = None;
-    let candidates = [
+    let mut candidates = vec![
         PathBuf::from("extensions").join("pew-browser-extension"),
         PathBuf::from("..").join("..").join("extensions").join("pew-browser-extension"),
-        PathBuf::from(r"C:\Users\RAFIQ\Projects\Pew-download-manager\extensions\pew-browser-extension"),
     ];
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("extensions").join("pew-browser-extension"));
+            candidates.push(exe_dir.join("pew-browser-extension"));
+            candidates.push(exe_dir.join("resources").join("extensions").join("pew-browser-extension"));
+        }
+    }
+
+    candidates.push(PathBuf::from(r"C:\Users\RAFIQ\Projects\Pew-download-manager\extensions\pew-browser-extension"));
+
     for c in &candidates {
         if c.exists() && c.is_dir() {
             if let Ok(canon) = c.canonicalize() {
@@ -1300,10 +1441,18 @@ fn exit_app(app: AppHandle) {
 }
 
 fn dirs_fallback() -> PathBuf {
-    if let Ok(user_profile) = std::env::var("USERPROFILE") {
-        let downloads = PathBuf::from(user_profile).join("Downloads");
-        if downloads.exists() {
-            return downloads;
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            let downloads = PathBuf::from(&user_profile).join("Downloads");
+            let _ = std::fs::create_dir_all(&downloads);
+            if downloads.exists() {
+                return downloads;
+            }
+            let one_drive_dl = PathBuf::from(&user_profile).join("OneDrive").join("Downloads");
+            if one_drive_dl.exists() {
+                return one_drive_dl;
+            }
         }
     }
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -1562,11 +1711,20 @@ Connection: close\r\n\r\n{}",
                         }
                     }
 
-                    if target_path.is_none() {
-                        if let Some(tid) = task_id {
-                            let map = dl_map.lock().await;
-                            if let Some(item) = map.get(&tid) {
-                                target_path = item.target_path.clone();
+                    if let Some(ref tid) = task_id {
+                        let map = dl_map.lock().await;
+                        if let Some(item) = map.get(tid) {
+                            if let Some(ref tp) = item.target_path {
+                                if std::path::Path::new(tp).exists() {
+                                    target_path = Some(tp.clone());
+                                }
+                            }
+                            if target_path.as_ref().map_or(true, |p| !std::path::Path::new(p).exists()) {
+                                let cfg = cfg_ref.lock().await;
+                                let candidate = std::path::Path::new(&cfg.download_dir).join(&item.filename);
+                                if candidate.exists() {
+                                    target_path = Some(candidate.to_string_lossy().to_string());
+                                }
                             }
                         }
                     }
@@ -1606,11 +1764,20 @@ Connection: close\r\n\r\n{}",
                         }
                     }
 
-                    if target_path.is_none() {
-                        if let Some(tid) = task_id {
-                            let map = dl_map.lock().await;
-                            if let Some(item) = map.get(&tid) {
-                                target_path = item.target_path.clone();
+                    if let Some(ref tid) = task_id {
+                        let map = dl_map.lock().await;
+                        if let Some(item) = map.get(tid) {
+                            if let Some(ref tp) = item.target_path {
+                                if std::path::Path::new(tp).exists() {
+                                    target_path = Some(tp.clone());
+                                }
+                            }
+                            if target_path.as_ref().map_or(true, |p| !std::path::Path::new(p).exists()) {
+                                let cfg = cfg_ref.lock().await;
+                                let candidate = std::path::Path::new(&cfg.download_dir).join(&item.filename);
+                                if candidate.exists() {
+                                    target_path = Some(candidate.to_string_lossy().to_string());
+                                }
                             }
                         }
                     }
@@ -1618,15 +1785,10 @@ Connection: close\r\n\r\n{}",
                     let path_to_open = match target_path {
                         Some(ref p) if !p.trim().is_empty() => {
                             let p_obj = std::path::Path::new(p);
-                            if p_obj.is_file() {
+                            if p_obj.exists() {
                                 p.clone()
-                            } else if let Some(parent) = p_obj.parent() {
-                                if parent.exists() {
-                                    parent.to_string_lossy().to_string()
-                                } else {
-                                    let cfg = cfg_ref.lock().await;
-                                    cfg.download_dir.clone()
-                                }
+                            } else if let Some(parent) = p_obj.parent().filter(|d| d.exists()) {
+                                parent.to_string_lossy().to_string()
                             } else {
                                 let cfg = cfg_ref.lock().await;
                                 cfg.download_dir.clone()

@@ -18,16 +18,16 @@
 
 ---
 
-## 📥 Downloads (Latest Release v0.1.1)
+## 📥 Downloads (Latest Release v0.1.2)
 
 Get the latest official packages directly from GitHub Releases:
 
 | Package | Format | Architecture | Download Link | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows Setup Wizard** *(Recommended)* | `.exe` | Windows x64 | [⬇️ **Download Setup .exe**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.1/Pew.Download.Manager_0.1.1_x64-setup.exe) | Standard Windows installer with desktop & start menu shortcuts. Bundles all media tools. |
-| **Windows MSI Package** | `.msi` | Windows x64 | [⬇️ **Download MSI**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.1/Pew.Download.Manager_0.1.1_x64_en-US.msi) | Windows enterprise / installer package. |
-| **Portable Standalone** | `.zip` | Windows x64 | [⬇️ **Download Portable .zip**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.1/Pew-Download-Manager-Windows-x64.zip) | Portable version — extract and run immediately without installation. |
-| **Browser Extension** | `.zip` | Universal (MV3) | [⬇️ **Download Extension .zip**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.1/pew-browser-extension.zip) | Manifest V3 extension for Chrome, Edge, Brave, and Chromium browsers. |
+| **Windows Setup Wizard** *(Recommended)* | `.exe` | Windows x64 | [⬇️ **Download Setup .exe**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.2/Pew.Download.Manager_0.1.2_x64-setup.exe) | Standard Windows installer with desktop & start menu shortcuts. Bundles all media tools. |
+| **Windows MSI Package** | `.msi` | Windows x64 | [⬇️ **Download MSI**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.2/Pew.Download.Manager_0.1.2_x64_en-US.msi) | Windows enterprise / installer package. |
+| **Portable Standalone** | `.zip` | Windows x64 | [⬇️ **Download Portable .zip**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.2/Pew-Download-Manager-Windows-x64.zip) | Portable version — extract and run immediately without installation. |
+| **Browser Extension** | `.zip` | Universal (MV3) | [⬇️ **Download Extension .zip**](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.2/pew-browser-extension.zip) | Manifest V3 extension for Chrome, Edge, Brave, and Chromium browsers. |
 
 👉 Browse all release assets and changelogs on the [**GitHub Releases Page**](https://github.com/Hue-coder/Pew-download-manager/releases).
 
@@ -51,7 +51,7 @@ Get the latest official packages directly from GitHub Releases:
 ### 1. Desktop Application Installation
 
 #### Option A: Windows Installer (Setup Wizard)
-1. Download **[Pew.Download.Manager_0.1.1_x64-setup.exe](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.1/Pew.Download.Manager_0.1.1_x64-setup.exe)**.
+1. Download **[Pew.Download.Manager_0.1.2_x64-setup.exe](https://github.com/Hue-coder/Pew-download-manager/releases/download/v0.1.2/Pew.Download.Manager_0.1.2_x64-setup.exe)**.
 2. Double-click the installer and follow the **Next > Install** steps.
 3. Pew will automatically create Start Menu & Desktop shortcuts and launch silently into the System Tray.
 
